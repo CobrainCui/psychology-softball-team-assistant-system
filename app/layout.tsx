@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Navbar from "@/components/Navbar";
+import SiteFooter from "@/components/SiteFooter";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -25,13 +26,14 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="zh-CN"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased print:h-auto`}
     >
       {/* 打印防呆：取消强制全屏高度与 flex 布局，避免打印时出现空白页或内容被裁切 */}
       <body className="flex min-h-full flex-col print:block print:min-h-0">
         <Navbar />
         {children}
+        <SiteFooter />
       </body>
     </html>
   );

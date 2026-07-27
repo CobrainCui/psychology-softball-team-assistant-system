@@ -8,7 +8,8 @@
 - 图标：Lucide React
 
 # 业务领域基准 (Domain Baseline: Softball AI System)
-- 系统服务于大学业余棒垒球队，需处理伤病数据 (Pre-hab Engine)、女性生理周期动态负荷折算 (The Female Athlete Paradigm)、以及极简赛场数据记录。
+- 系统服务于大学业余**满垒球（慢投 / 下抛）**球队，需处理伤病数据 (Pre-hab Engine)、女性生理周期动态负荷折算 (The Female Athlete Paradigm)、以及极简赛场数据记录。
+- 投球形态为下抛弧线球，**不是** Windmill 快投；伤病与负荷文案以传杀、打击、跑垒为主，禁止套用快投投球数/风车力学建议。
 - 严禁出现与运动科学相悖的建议。变量命名需符合临床/专业体育语境（如使用 `rpe_score`, `injury_baseline`, `load_management`）。
 
 # 架构与编码纪律 (Architectural & Coding Disciplines)

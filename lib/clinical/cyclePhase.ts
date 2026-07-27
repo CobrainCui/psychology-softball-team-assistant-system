@@ -80,12 +80,13 @@ export function getCyclePhase(
   };
 }
 
-// 女性专属负荷折算：排卵期韧带松弛 + 黄体期代谢负荷，仅在疲劳偏高时额外扣分
+// 女性专属负荷折算：经期/排卵/黄体在疲劳偏高时额外扣分（周期同步训练共识摘要）
 export function getFemaleCyclePenalty(
   phase: CyclePhase,
   fatigueScore: number
 ): number {
   let penalty = 0;
+  if (phase.isMenstrual && fatigueScore >= 6) penalty += 10;
   if (phase.isOvulation && fatigueScore >= 6) penalty += 15;
   if (phase.isLuteal && fatigueScore >= 6) penalty += 10;
   return penalty;

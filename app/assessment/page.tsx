@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRequireAuth } from "@/lib/useRequireAuth";
+import MedicalDisclaimer from "@/components/MedicalDisclaimer";
 import {
   ASSESSMENT_PAIN_AREA_OPTIONS,
   PAIN_AREA_LABEL,
@@ -13,6 +14,18 @@ import {
   getFemaleCyclePenalty,
 } from "@/lib/clinical/cyclePhase";
 import {
+  ACL_PREVENTION_CUES,
+  FEMALE_HEALTH_RED_FLAGS,
+  getCycleGuidance,
+  type CycleGuidance,
+} from "@/lib/clinical/cycleGuidance";
+import {
+  COMPENSATION_ACTIVATION_DICTIONARY,
+  INJURY_WARMUP_DICTIONARY,
+  PROBE_ACTION_DICTIONARY,
+} from "@/lib/clinical/prehabProtocols";
+import { getVasBandLabel, VAS_SCALE_HINT } from "@/lib/clinical/vasBands";
+import {
   findRecentInjuryPart,
   getTodayDateStr,
   loadPlayerReadinessHistory,
@@ -20,6 +33,10 @@ import {
   type ReadinessHistoryEntry,
   upsertReadinessEntry,
 } from "@/lib/readinessHistory";
+import {
+  getPeriodStartDate,
+  setPeriodStartDate as persistPeriodStartDate,
+} from "@/lib/periodStart";
 
 type SleepQuality = "good" | "normal" | "bad";
 
@@ -36,27 +53,6 @@ const PROBE_OPTIONS: { value: ProbeFeedback; label: string }[] = [
   { value: "B", label: "B. 仍有卡顿或轻微拉扯感" },
   { value: "C", label: "C. 疼痛加剧，影响动作" },
 ];
-
-const PROBE_ACTION_DICTIONARY: Record<AssessmentPainArea, string> = {
-  knee: "请进行一次徒手深蹲至大腿平行地面。",
-  shoulder: "请进行一次徒手靠墙天使 (Wall Angel) 或空手模拟传球。",
-  lumbar: "请进行一次体前屈触趾。",
-  ankle: "请进行一次单脚提踵至最高点。",
-};
-
-const INJURY_WARMUP_DICTIONARY: Record<AssessmentPainArea, string> = {
-  shoulder: "胸小肌网球松解，禁止痛点强行拉伸。",
-  lumbar: "麦肯锡伸展法定向减压，配合死虫式核心抗伸展激活。",
-  knee: "侧卧蚌壳式激活，配合泡沫轴滚压大腿前侧，绝对避开痛点区域。",
-  ankle: "遵循 RICE 原则局部消炎，稳定性训练前须先经专业运动医学评估。",
-};
-
-const COMPENSATION_ACTIVATION_DICTIONARY: Record<AssessmentPainArea, string> = {
-  shoulder: "弹力带古巴推举，配合 YTWL 字母操逐级激活肩胛稳定肌群。",
-  lumbar: "麦肯锡伸展法，配合死虫式核心抗伸展训练。",
-  knee: "侧卧蚌壳式训练，配合侧向弹力带行走激活臀中肌。",
-  ankle: "弹力带足内外翻抗阻训练，重建踝关节本体感觉与稳定性。",
-};
 
 type ReadinessTier = "red" | "yellow" | "green";
 
@@ -85,6 +81,10 @@ interface ReadinessResult {
   score: number;
   tier: ReadinessTier;
   cyclePhaseLabel: string | null;
+  cycleGuidance: CycleGuidance | null;
+  showAclCues: boolean;
+  showFemaleRedFlags: boolean;
+  vasBandLabel: string | null;
   redReason: "newInjury" | "probe" | null;
   newInjuryAreaLabel: string | null;
   compensationAreaLabel: string | null;
@@ -97,7 +97,9 @@ export default function AssessmentPage() {
   const [sleepQuality, setSleepQuality] = useState<SleepQuality>("normal");
   const [stressScore, setStressScore] = useState(3);
   const [fatigueScore, setFatigueScore] = useState(3);
+  const [sorenessScore, setSorenessScore] = useState(3);
   const [periodStartDate, setPeriodStartDate] = useState("");
+  const [cycleIrregular, setCycleIrregular] = useState(false);
 
   const [hasNewInjury, setHasNewInjury] = useState(false);
   const [newInjuryArea, setNewInjuryArea] =
@@ -112,7 +114,10 @@ export default function AssessmentPage() {
   useEffect(() => {
     if (!isMounted || !currentUser) return;
     setHistory(loadPlayerReadinessHistory(currentUser.playerId));
-  }, [isMounted, currentUser?.playerId]);
+    if (currentUser.gender === "female") {
+      setPeriodStartDate(getPeriodStartDate(currentUser.playerId));
+    }
+  }, [isMounted, currentUser?.playerId, currentUser?.gender]);
 
   const isFemale = isMounted && currentUser?.gender === "female";
   const recentInjuryRaw = findRecentInjuryPart(history);
@@ -125,18 +130,30 @@ export default function AssessmentPage() {
     setProbeFeedback(null);
   }, [recentInjuryPart]);
 
-  // 超级状态融合算法 2.0：基础扣分 + 历史探针；熔断归零红牌
+  // 超级状态融合：Hooper 式维度（睡眠/压力/疲劳/酸痛）+ 周期负荷 + 历史探针
   const handleGenerate = () => {
     const isProbeCritical = recentInjuryPart !== null && probeFeedback === "C";
+
+    const phase =
+      isFemale && periodStartDate ? getCyclePhase(periodStartDate) : null;
+    const cycleGuidance = phase ? getCycleGuidance(phase) : null;
 
     if (isNewInjuryCritical || isProbeCritical) {
       archiveToday(0);
       setResult({
         score: 0,
         tier: "red",
-        cyclePhaseLabel: null,
+        cyclePhaseLabel: phase?.label ?? null,
+        cycleGuidance,
+        showAclCues: Boolean(phase?.isOvulation),
+        showFemaleRedFlags: isFemale && cycleIrregular,
+        vasBandLabel: isNewInjuryCritical
+          ? getVasBandLabel(newInjuryScore)
+          : null,
         redReason: isNewInjuryCritical ? "newInjury" : "probe",
-        newInjuryAreaLabel: null,
+        newInjuryAreaLabel: isNewInjuryCritical
+          ? PAIN_AREA_LABEL[newInjuryArea]
+          : null,
         compensationAreaLabel: null,
         compensationAction: null,
       });
@@ -148,13 +165,12 @@ export default function AssessmentPage() {
     if (sleepQuality === "bad") score -= 20;
     if (stressScore > 7) score -= 15;
     if (fatigueScore > 7) score -= 20;
+    // 肌肉酸痛：对齐 Hooper Index 中的酸痛维度
+    if (sorenessScore > 7) score -= 15;
+    else if (sorenessScore >= 5) score -= 8;
 
-    let cyclePhaseLabel: string | null = null;
-
-    if (isFemale && periodStartDate) {
-      const phase = getCyclePhase(periodStartDate);
-      cyclePhaseLabel = phase.label;
-      score -= getFemaleCyclePenalty(phase, fatigueScore);
+    if (phase) {
+      score -= getFemaleCyclePenalty(phase, Math.max(fatigueScore, sorenessScore));
     }
 
     const isProbeCaution = recentInjuryPart !== null && probeFeedback === "B";
@@ -162,16 +178,23 @@ export default function AssessmentPage() {
 
     score = Math.max(0, Math.min(100, score));
 
-    const needsCaution = hasNewInjury || isProbeCaution;
+    const needsCaution =
+      hasNewInjury || isProbeCaution || (isFemale && cycleIrregular);
     let tier: ReadinessTier = score >= 70 ? "green" : "yellow";
     if (needsCaution && tier === "green") tier = "yellow";
+    // 排卵期即便高分也不给全力变向绿灯（ACL 安全帽）
+    if (phase?.isOvulation && tier === "green") tier = "yellow";
 
     archiveToday(score);
 
     setResult({
       score,
       tier,
-      cyclePhaseLabel,
+      cyclePhaseLabel: phase?.label ?? null,
+      cycleGuidance,
+      showAclCues: Boolean(phase?.isOvulation),
+      showFemaleRedFlags: isFemale && cycleIrregular,
+      vasBandLabel: hasNewInjury ? getVasBandLabel(newInjuryScore) : null,
       redReason: null,
       newInjuryAreaLabel: hasNewInjury ? PAIN_AREA_LABEL[newInjuryArea] : null,
       compensationAreaLabel: isProbeCaution
@@ -225,6 +248,8 @@ export default function AssessmentPage() {
           </p>
         </div>
 
+        <MedicalDisclaimer />
+
         {/* 输入层：每日轻量化打卡 */}
         <div className="flex flex-col gap-2 border border-zinc-200 p-4">
           <label className="text-xs uppercase text-gray-500">睡眠与恢复</label>
@@ -246,7 +271,7 @@ export default function AssessmentPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="flex flex-col gap-2 border border-zinc-200 p-4">
             <label className="text-xs uppercase text-gray-500">
               心理压力 (0 无压力 / 10 极度焦虑)
@@ -267,7 +292,7 @@ export default function AssessmentPage() {
 
           <div className="flex flex-col gap-2 border border-zinc-200 p-4">
             <label className="text-xs uppercase text-gray-500">
-              身体疲劳度 (0 状态满格 / 10 极度疲劳)
+              身体疲劳度 (0 满格 / 10 极度疲劳)
             </label>
             <input
               type="range"
@@ -282,6 +307,24 @@ export default function AssessmentPage() {
               {fatigueScore}
             </span>
           </div>
+
+          <div className="flex flex-col gap-2 border border-zinc-200 p-4">
+            <label className="text-xs uppercase text-gray-500">
+              肌肉酸痛 (0 无酸 / 10 严重酸痛 · Hooper)
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={10}
+              step={1}
+              value={sorenessScore}
+              onChange={(e) => setSorenessScore(Number(e.target.value))}
+              className="accent-zinc-900"
+            />
+            <span className="text-right font-mono text-sm text-zinc-900">
+              {sorenessScore}
+            </span>
+          </div>
         </div>
 
         {isFemale && (
@@ -292,13 +335,53 @@ export default function AssessmentPage() {
               <input
                 type="date"
                 value={periodStartDate}
-                onChange={(e) => setPeriodStartDate(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setPeriodStartDate(next);
+                  if (currentUser) {
+                    persistPeriodStartDate(currentUser.playerId, next);
+                  }
+                }}
                 className="border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
               />
             </div>
             <p className="text-xs leading-relaxed text-zinc-400">
               系统自动推算所处阶段：经期 1-5 天 · 卵泡 6-13 天 · 排卵 14-16 天 · 黄体 17-28 天。
             </p>
+            <div className="flex items-center justify-between gap-2 border-t border-zinc-200 pt-3">
+              <span className="text-xs text-zinc-500">
+                近 3 个月月经是否大致规律？
+              </span>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => setCycleIrregular(false)}
+                  className={`border px-3 py-1 text-xs transition-colors ${
+                    !cycleIrregular
+                      ? "border-zinc-900 bg-zinc-900 text-white"
+                      : "border-zinc-300 text-zinc-500 hover:bg-zinc-100"
+                  }`}
+                >
+                  规律
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCycleIrregular(true)}
+                  className={`border px-3 py-1 text-xs transition-colors ${
+                    cycleIrregular
+                      ? "border-amber-600 bg-amber-600 text-white"
+                      : "border-zinc-300 text-zinc-500 hover:bg-zinc-100"
+                  }`}
+                >
+                  不规律/长期未来潮
+                </button>
+              </div>
+            </div>
+            {cycleIrregular && (
+              <p className="text-xs leading-relaxed text-amber-700">
+                提示：月经长期不规律可能与低能量可用性（RED-S）相关，建议优先提高能量摄入并转介专业医疗，而非仅靠减训硬撑。
+              </p>
+            )}
           </div>
         )}
 
@@ -338,7 +421,7 @@ export default function AssessmentPage() {
             <div className="flex flex-col gap-3 border-t border-zinc-200 pt-3">
               <div className="flex flex-col gap-2">
                 <label className="text-xs uppercase text-gray-500">疼痛部位</label>
-                <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-1 sm:grid-cols-3">
                   {ASSESSMENT_PAIN_AREA_OPTIONS.map((option) => (
                     <button
                       key={option.value}
@@ -360,7 +443,7 @@ export default function AssessmentPage() {
 
               <div className="flex flex-col gap-2">
                 <label className="text-xs uppercase text-gray-500">
-                  疼痛等级 (VAS，≥7 触发红色熔断)
+                  疼痛等级 (VAS，≥{PAIN_CIRCUIT_BREAKER_THRESHOLD} 触发红色熔断)
                 </label>
                 <input
                   type="range"
@@ -373,12 +456,13 @@ export default function AssessmentPage() {
                 />
                 <div className="flex items-center justify-between text-xs text-zinc-400">
                   <span>0 无感</span>
-                  <span>7 熔断阈值</span>
+                  <span>{PAIN_CIRCUIT_BREAKER_THRESHOLD} 熔断</span>
                   <span>10 无法忍受</span>
                 </div>
                 <span className="text-right font-mono text-sm text-zinc-900">
-                  {newInjuryScore}
+                  {newInjuryScore} · {getVasBandLabel(newInjuryScore)}
                 </span>
+                <p className="text-xs text-zinc-400">{VAS_SCALE_HINT}</p>
                 {isNewInjuryCritical && (
                   <p className="text-xs font-semibold text-red-600">
                     ⚠️ 已触及熔断阈值，将强制归零 Readiness 分数并锁定为红牌警告。
@@ -450,6 +534,62 @@ export default function AssessmentPage() {
               <span className="font-mono text-3xl">{result.score} / 100</span>
             </div>
 
+            {result.vasBandLabel && (
+              <p className="mt-2 text-xs opacity-70">VAS 判读：{result.vasBandLabel}</p>
+            )}
+
+            {result.cycleGuidance && (
+              <div className="mt-4 border border-current/20 p-3">
+                <p className="text-xs font-semibold uppercase opacity-70">
+                  周期同步训练 · {result.cycleGuidance.phaseLabel}
+                </p>
+                <p className="mt-1 text-sm leading-relaxed">
+                  {result.cycleGuidance.energyHint}
+                </p>
+                <ul className="mt-2 list-inside list-disc text-sm leading-relaxed opacity-90">
+                  {result.cycleGuidance.trainingFocus.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+                {result.cycleGuidance.cautions.length > 0 && (
+                  <p className="mt-2 text-xs opacity-70">
+                    注意：{result.cycleGuidance.cautions.join("；")}
+                  </p>
+                )}
+                {result.cycleGuidance.nutritionHints.length > 0 && (
+                  <p className="mt-1 text-xs opacity-70">
+                    营养：{result.cycleGuidance.nutritionHints.join("；")}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {result.showAclCues && (
+              <div className="mt-3 border border-amber-500 bg-amber-50 p-3 text-zinc-900">
+                <p className="text-xs font-semibold uppercase text-amber-700">
+                  排卵窗口 · ACL 预防清单
+                </p>
+                <ul className="mt-2 list-inside list-disc text-sm leading-relaxed">
+                  {ACL_PREVENTION_CUES.map((cue) => (
+                    <li key={cue}>{cue}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {result.showFemaleRedFlags && (
+              <div className="mt-3 border border-amber-600 p-3">
+                <p className="text-xs font-semibold uppercase text-amber-800">
+                  女性健康早期警示（须转介，非诊断）
+                </p>
+                <ul className="mt-2 list-inside list-disc text-sm leading-relaxed">
+                  {FEMALE_HEALTH_RED_FLAGS.map((flag) => (
+                    <li key={flag}>{flag}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {result.tier === "red" && (
               <div className="mt-4 border border-white/40 p-3">
                 <p className="text-sm font-semibold uppercase tracking-wide">
@@ -459,7 +599,7 @@ export default function AssessmentPage() {
                   {result.redReason === "probe"
                     ? "历史伤病复测显示疼痛加剧、已明显影响动作，"
                     : "新发伤病疼痛等级突破阈值，"}
-                  立刻停止任何专项与力量训练。请寻求专业医疗介入。今日任务：彻底休息与冰敷。
+                  立刻停止任何专项与力量训练。请寻求专业医疗介入。今日任务：彻底休息与冰敷。投掷侧手臂痛时尤须停止大力传杀与下抛硬抛。
                 </p>
               </div>
             )}
@@ -473,7 +613,7 @@ export default function AssessmentPage() {
                   <p className="mt-1 text-sm leading-relaxed text-zinc-900">
                     {hasNewInjury
                       ? INJURY_WARMUP_DICTIONARY[newInjuryArea]
-                      : "常规动力链激活，当前疲劳/压力负荷偏高，动作幅度与强度需渐进爬升。"}
+                      : "常规动力链激活（髋–核心–肩胛）；疲劳/酸痛偏高时动作幅度与强度渐进爬升。"}
                   </p>
                 </div>
 
@@ -493,7 +633,7 @@ export default function AssessmentPage() {
                     绝对红线
                   </p>
                   <p className="mt-1 text-sm leading-relaxed text-zinc-900">
-                    禁止极限冲刺与大重量深蹲。
+                    禁止极限冲刺、失控急停变向与大重量深蹲新高；传杀/下抛出现疲劳信号（控球变差、臂酸加重）立即减量。
                   </p>
                 </div>
 
@@ -505,8 +645,9 @@ export default function AssessmentPage() {
                     <span className="font-mono text-sm text-zinc-900">负荷 60%</span>
                   </div>
                   <ul className="mt-2 list-inside list-disc text-sm leading-relaxed text-zinc-900">
-                    <li>网球拍视觉动态捕捉（降噪特训）</li>
-                    <li>击球点固定姿势挥击（不发力）</li>
+                    <li>击球点固定姿势挥击（控制发力，不追极限挥速）</li>
+                    <li>落地与变向质量练习（膝盖与第二脚趾同向）</li>
+                    <li>低强度传接与防守脚步，避免堆传杀与连续大力下抛</li>
                   </ul>
                 </div>
               </div>
@@ -517,7 +658,7 @@ export default function AssessmentPage() {
                 <div className="border border-zinc-300 p-3">
                   <p className="text-xs font-semibold uppercase text-zinc-500">热身</p>
                   <p className="mt-1 text-sm leading-relaxed text-zinc-900">
-                    常规动力链激活。
+                    动力链激活：臀中肌、核心抗旋转、肩胛稳定；赛前动态热身，长静态拉伸放课后。
                   </p>
                 </div>
 
@@ -529,9 +670,9 @@ export default function AssessmentPage() {
                     <span className="font-mono text-sm text-zinc-900">负荷 100%</span>
                   </div>
                   <ul className="mt-2 list-inside list-disc text-sm leading-relaxed text-zinc-900">
-                    <li>外野高飞球极限落点判断</li>
-                    <li>实战发力打击</li>
-                    <li>大重量下肢爆发力训练</li>
+                    <li>外野高飞球落点判断与启动</li>
+                    <li>实战发力打击 / 技术密集操练</li>
+                    <li>下肢爆发力与髋驱动力量（仍监控落地膝位）</li>
                   </ul>
                 </div>
               </div>

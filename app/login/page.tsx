@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 import {
   Gender,
-  loadPlayers,
-  Player,
-  savePlayers,
+  normalizePlayerRole,
+  PlayerRole,
 } from "@/lib/players";
+import { getPlayers, loginOrRegister, type CloudPlayer } from "@/lib/actions";
 import { CurrentUser, setStoredCurrentUser } from "@/lib/currentUser";
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
@@ -14,73 +14,105 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "male", label: "男" },
 ];
 
+const ROLE_OPTIONS: { value: PlayerRole; label: string }[] = [
+  { value: "player", label: "队员" },
+  { value: "coach", label: "教练" },
+];
+
 type LoginMode = "select" | "create";
+
+// 推导步骤：云端 Player → 前端 Session（softball_currentUser）
+function persistSession(player: {
+  id: string;
+  name: string;
+  gender?: Gender | null;
+  role?: PlayerRole;
+}, fallbackGender: Gender, fallbackRole: PlayerRole) {
+  const gender = player.gender ?? fallbackGender;
+  const role = normalizePlayerRole(player.role ?? fallbackRole);
+  const currentUser: CurrentUser = {
+    playerId: player.id,
+    playerName: player.name,
+    gender,
+    role,
+  };
+  setStoredCurrentUser(currentUser);
+}
 
 export default function LoginPage() {
   const [mode, setMode] = useState<LoginMode>("select");
-  const [players, setPlayers] = useState<Player[]>([]);
+  const [players, setPlayers] = useState<CloudPlayer[]>([]);
   const [isMounted, setIsMounted] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
+  const [error, setError] = useState("");
 
   const [selectedPlayerId, setSelectedPlayerId] = useState("");
   const [selectGender, setSelectGender] = useState<Gender>("female");
+  const [selectRole, setSelectRole] = useState<PlayerRole>("player");
 
   const [name, setName] = useState("");
   const [createGender, setCreateGender] = useState<Gender>("female");
+  const [createRole, setCreateRole] = useState<PlayerRole>("player");
 
   useEffect(() => {
-    const loaded = loadPlayers();
-    setPlayers(loaded);
-    setSelectedPlayerId(loaded[0]?.id ?? "");
-    const firstGender = loaded[0]?.gender;
-    if (firstGender) setSelectGender(firstGender);
-    setIsMounted(true);
+    let cancelled = false;
+    (async () => {
+      const res = await getPlayers();
+      if (cancelled) return;
+      if (!res.success) {
+        console.error("云端被拒:", res.error);
+        setError(`无法读取云端名册：${res.error}`);
+        setIsMounted(true);
+        return;
+      }
+      setPlayers(res.players);
+      setSelectedPlayerId(res.players[0]?.id ?? "");
+      const first = res.players[0];
+      if (first?.gender) setSelectGender(first.gender);
+      if (first) setSelectRole(normalizePlayerRole(first.role));
+      setIsMounted(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const selectedPlayer = players.find((player) => player.id === selectedPlayerId);
   const selectedNeedsGender = Boolean(selectedPlayer && !selectedPlayer.gender);
 
-  // 选择已有队员：复用名册 id，缺 gender 时补全后再写入身份
-  const handleSelectExisting = () => {
-    if (!selectedPlayer) return;
+  const handleSelectExisting = async () => {
+    if (!selectedPlayer || isBusy) return;
 
     const gender = selectedPlayer.gender ?? selectGender;
-    if (!selectedPlayer.gender) {
-      const nextPlayers = players.map((player) =>
-        player.id === selectedPlayer.id ? { ...player, gender } : player
-      );
-      savePlayers(nextPlayers);
-      setPlayers(nextPlayers);
-    }
+    const role = selectRole;
 
-    const currentUser: CurrentUser = {
-      playerId: selectedPlayer.id,
-      playerName: selectedPlayer.name,
-      gender,
-    };
-    setStoredCurrentUser(currentUser);
+    setIsBusy(true);
+    setError("");
+    const res = await loginOrRegister(selectedPlayer.name, gender, role);
+    if (!res.success) {
+      console.error("云端被拒:", res.error);
+      setError(`登录失败：${res.error}`);
+      setIsBusy(false);
+      return;
+    }
+    persistSession(res.player, gender, role);
     window.location.href = "/";
   };
 
-  // 新建队员：生成唯一 playerId，同步写入名册与当前身份
-  const handleCreate = () => {
+  const handleCreate = async () => {
     const trimmedName = name.trim();
-    if (!trimmedName) return;
+    if (!trimmedName || isBusy) return;
 
-    const playerId = crypto.randomUUID();
-    const newPlayer: Player = {
-      id: playerId,
-      name: trimmedName,
-      gender: createGender,
-    };
-    const nextPlayers = [...loadPlayers(), newPlayer];
-    savePlayers(nextPlayers);
-
-    const currentUser: CurrentUser = {
-      playerId,
-      playerName: trimmedName,
-      gender: createGender,
-    };
-    setStoredCurrentUser(currentUser);
+    setIsBusy(true);
+    setError("");
+    const res = await loginOrRegister(trimmedName, createGender, createRole);
+    if (!res.success) {
+      console.error("云端被拒:", res.error);
+      setError(`注册失败：${res.error}`);
+      setIsBusy(false);
+      return;
+    }
+    persistSession(res.player, createGender, createRole);
     window.location.href = "/";
   };
 
@@ -118,6 +150,10 @@ export default function LoginPage() {
           </button>
         </div>
 
+        {error ? (
+          <p className="mb-3 text-center text-xs text-red-600">{error}</p>
+        ) : null}
+
         {mode === "select" ? (
           <div className="flex flex-col gap-4">
             {players.length === 0 ? (
@@ -135,6 +171,7 @@ export default function LoginPage() {
                       setSelectedPlayerId(nextId);
                       const next = players.find((player) => player.id === nextId);
                       if (next?.gender) setSelectGender(next.gender);
+                      setSelectRole(normalizePlayerRole(next?.role));
                     }}
                     className="border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
                   >
@@ -142,8 +179,9 @@ export default function LoginPage() {
                       <option key={player.id} value={player.id}>
                         {player.name}
                         {player.gender
-                          ? ` (${player.gender === "male" ? "男" : "女"})`
-                          : " (未填性别)"}
+                          ? ` · ${player.gender === "male" ? "男" : "女"}`
+                          : " · 未填性别"}
+                        {` · ${normalizePlayerRole(player.role) === "coach" ? "教练" : "队员"}`}
                       </option>
                     ))}
                   </select>
@@ -173,12 +211,32 @@ export default function LoginPage() {
                   </div>
                 )}
 
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs uppercase text-gray-500">角色</span>
+                  <div className="flex gap-1">
+                    {ROLE_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setSelectRole(option.value)}
+                        className={`flex-1 border py-1.5 text-sm transition-colors ${
+                          selectRole === option.value
+                            ? "border-zinc-900 bg-zinc-900 text-white"
+                            : "border-zinc-300 text-zinc-500 hover:bg-zinc-100"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <button
-                  onClick={handleSelectExisting}
-                  disabled={!selectedPlayer}
+                  onClick={() => void handleSelectExisting()}
+                  disabled={!selectedPlayer || isBusy}
                   className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:opacity-30"
                 >
-                  以该身份进入
+                  {isBusy ? "登录中…" : "以该身份进入"}
                 </button>
               </>
             )}
@@ -216,12 +274,32 @@ export default function LoginPage() {
               </div>
             </div>
 
+            <div className="flex flex-col gap-1">
+              <span className="text-xs uppercase text-gray-500">角色</span>
+              <div className="flex gap-1">
+                {ROLE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setCreateRole(option.value)}
+                    className={`flex-1 border py-1.5 text-sm transition-colors ${
+                      createRole === option.value
+                        ? "border-zinc-900 bg-zinc-900 text-white"
+                        : "border-zinc-300 text-zinc-500 hover:bg-zinc-100"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <button
-              onClick={handleCreate}
-              disabled={!name.trim()}
+              onClick={() => void handleCreate()}
+              disabled={!name.trim() || isBusy}
               className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:opacity-30"
             >
-              建立个人运动档案
+              {isBusy ? "注册中…" : "建立个人运动档案"}
             </button>
           </div>
         )}

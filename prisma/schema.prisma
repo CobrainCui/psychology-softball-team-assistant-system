@@ -1,0 +1,184 @@
+// Softball AI System — 权威数据契约（PostgreSQL）
+// 对齐 lib 层：Player / GameArchive / Readiness / InjuryLog
+// 单队试点：Team 预留一队；正式成绩在此，localStorage 仅作 session 草稿
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ——— 枚举：与前端 TypeScript 契约对齐 ———
+
+enum Gender {
+  male
+  female
+}
+
+enum PlayerRole {
+  player
+  coach
+}
+
+enum HitResult {
+  LD
+  FB
+  GB
+  PU
+  MISS
+}
+
+enum PitchType {
+  FB
+  CB
+  SL
+  CH
+  OT
+}
+
+enum HitQuality {
+  Hard
+  Medium
+  Soft
+}
+
+enum PainArea {
+  shoulder
+  elbow
+  lumbar
+  knee
+  ankle
+  wrist
+}
+
+enum ProbeFeedback {
+  A
+  B
+  C
+}
+
+// ——— 组织：一支球队（未来可扩展多队，当前只种子一队） ———
+
+model Team {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  players  Player[]
+  sessions TestSession[]
+}
+
+// ——— 名册 + 极简身份（教练/队员）；登录后续可挂 Credential ———
+
+model Player {
+  id        String     @id @default(cuid())
+  teamId    String
+  name      String
+  gender    Gender?
+  role      PlayerRole @default(player)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  team            Team              @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  hits            Hit[]
+  speedRecords    SpeedRecord[]
+  readinessChecks ReadinessCheck[]
+  injuryLogs      InjuryLog[]
+
+  @@index([teamId])
+  @@index([name])
+}
+
+// ——— 综合测试日归档（原 GameArchive；hits/speed 拆表达 3NF） ———
+
+model TestSession {
+  id            String   @id @default(cuid())
+  teamId        String
+  /// 对应前端 schemaVersion，便于迁移与兼容
+  schemaVersion Int      @default(1)
+  /// 归档时刻（原 gameId/date 语义合并）
+  archivedAt    DateTime
+  createdAt     DateTime @default(now())
+
+  team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  hits         Hit[]
+  speedRecords SpeedRecord[]
+
+  @@index([teamId, archivedAt])
+}
+
+model Hit {
+  id          String      @id @default(cuid())
+  sessionId   String
+  playerId    String
+  result      HitResult
+  /// 落点百分比 0–100；MISS 为空
+  x           Float?
+  y           Float?
+  pitchType   PitchType?
+  hitQuality  HitQuality?
+  recordedAt  DateTime
+
+  session TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  player  Player      @relation(fields: [playerId], references: [id], onDelete: Restrict)
+
+  @@index([sessionId])
+  @@index([playerId])
+}
+
+model SpeedRecord {
+  id                String   @id @default(cuid())
+  sessionId         String
+  playerId          String
+  firstBaseSeconds  Float?
+  secondBaseSeconds Float?
+  customSeconds     Float?
+  recordedAt        DateTime
+
+  session TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  player  Player      @relation(fields: [playerId], references: [id], onDelete: Restrict)
+
+  @@index([sessionId])
+  @@index([playerId])
+}
+
+// ——— 每日综合状态评估（原 readiness history；playerId+date 唯一） ———
+
+model ReadinessCheck {
+  id              String         @id @default(cuid())
+  playerId        String
+  /// 自然日 YYYY-MM-DD（UTC 日期边界由应用层约定）
+  date            DateTime       @db.Date
+  readinessScore  Int
+  hasNewInjury    Boolean        @default(false)
+  injuryPart      PainArea?
+  injuryScore     Int            @default(0)
+  probeFeedback   ProbeFeedback?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, date])
+  @@index([playerId, date])
+}
+
+// ——— 伤病处方归档（原 injury log） ———
+
+model InjuryLog {
+  id            String   @id @default(cuid())
+  playerId      String
+  schemaVersion Int      @default(1)
+  painArea      PainArea
+  painScore     Int
+  symptom       String
+  createdAt     DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, createdAt])
+}

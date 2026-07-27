@@ -11,13 +11,18 @@ const NAV_LINKS = [
   { href: "/profile", label: "个人档案" },
 ];
 
+/** 未登录可直接进入的路由；其余需 softball_currentUser Session */
 const PUBLIC_HREFS = new Set(["/"]);
 
+function roleLabel(role: string | undefined): string {
+  return role === "coach" ? "教练" : "队员";
+}
+
 export default function Navbar() {
+  // Session 来自登录页写入的 softball_currentUser（云端 Player 精简凭证）
   const { currentUser, isMounted } = useCurrentUser();
   const router = useRouter();
 
-  // 身份锁：公开页放行；其余未登录时拦截到 /login
   const handleNavClick = (
     e: React.MouseEvent<HTMLAnchorElement>,
     href: string
@@ -51,16 +56,25 @@ export default function Navbar() {
 
       <div className="flex shrink-0 items-center gap-3">
         <span className="text-sm text-zinc-300">
-          {isMounted && currentUser ? `身份: ${currentUser.playerName}` : "未登录"}
+          {isMounted && currentUser
+            ? `${roleLabel(currentUser.role)} · ${currentUser.playerName}`
+            : "未登录"}
         </span>
-        {isMounted && currentUser && (
+        {isMounted && currentUser ? (
           <button
             onClick={handleLogout}
             className="border border-zinc-700 px-3 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200"
           >
             退出登录
           </button>
-        )}
+        ) : isMounted ? (
+          <Link
+            href="/login"
+            className="border border-zinc-500 px-3 py-1 text-xs text-zinc-200 transition-colors hover:border-zinc-300 hover:text-white"
+          >
+            登录
+          </Link>
+        ) : null}
       </div>
     </nav>
   );

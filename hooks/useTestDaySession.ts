@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadPlayers, type Player, savePlayers } from "@/lib/players";
+import { type Player } from "@/lib/players";
+import { loginOrRegister } from "@/lib/actions";
 import {
   type HitQuality,
   type HitRecord,
@@ -9,7 +10,6 @@ import {
   type PitchType,
   type SpeedRecord,
 } from "@/lib/gameArchive";
-import { appendGameArchive } from "@/lib/gamesHistory";
 import {
   type Assignments,
   clearSessionDraft,
@@ -50,16 +50,13 @@ export function useTestDaySession() {
   const [speedRecords, setSpeedRecords] = useState<SpeedRecord[]>([]);
   const [speedInputs, setSpeedInputs] = useState<SpeedInputs>({});
 
+  // 名册由 app/page.tsx 通过 getPlayers() 注入；此处只恢复当场草稿
   useEffect(() => {
     const draft = loadSessionDraft();
     setHits(draft.hits);
     setSpeedRecords(draft.speedRecords);
     setAssignments(draft.assignments);
     setTestItems(draft.testItems);
-
-    const loadedPlayers = loadPlayers();
-    setPlayers(loadedPlayers);
-    setCurrentBatterId(loadedPlayers[0]?.id ?? "");
     setIsMounted(true);
   }, []);
 
@@ -73,11 +70,6 @@ export function useTestDaySession() {
       testItems,
     });
   }, [hits, speedRecords, assignments, testItems, isMounted]);
-
-  useEffect(() => {
-    if (!isMounted) return;
-    savePlayers(players);
-  }, [players, isMounted]);
 
   const currentBatter = players.find((player) => player.id === currentBatterId);
   const batterHits = hits.filter((hit) => hit.playerId === currentBatterId);
@@ -112,7 +104,6 @@ export function useTestDaySession() {
       timestamp: Date.now(),
     };
 
-    console.log("数据已准备好同步至云端:", newHit);
     setHits((prev) => [...prev, newHit]);
     setPendingHit(null);
     setCurrentHitQuality("Medium");
@@ -139,20 +130,31 @@ export function useTestDaySession() {
     });
   };
 
+  // 推导步骤：该队员是否已勾满全部测试 → 是则清空，否则全选
   const handleSelectAllTestsForPlayer = (playerId: string) => {
     setAssignments((prev) => {
       const current = prev[playerId] ?? [];
-      const merged = Array.from(new Set([...current, ...testItems]));
-      return { ...prev, [playerId]: merged };
+      const allSelected =
+        testItems.length > 0 && testItems.every((item) => current.includes(item));
+      return {
+        ...prev,
+        [playerId]: allSelected ? [] : [...testItems],
+      };
     });
   };
 
+  // 推导步骤：该测试是否已对全部队员勾选 → 是则全员取消，否则全员勾选
   const handleSelectAllPlayersForTest = (testItem: string) => {
     setAssignments((prev) => {
+      const allSelected =
+        players.length > 0 &&
+        players.every((player) => (prev[player.id] ?? []).includes(testItem));
       const next = { ...prev };
       players.forEach((player) => {
         const current = next[player.id] ?? [];
-        if (!current.includes(testItem)) {
+        if (allSelected) {
+          next[player.id] = current.filter((item) => item !== testItem);
+        } else if (!current.includes(testItem)) {
           next[player.id] = [...current, testItem];
         }
       });
@@ -243,29 +245,37 @@ export function useTestDaySession() {
     setHits((prev) => prev.filter((hit) => hit.playerId !== currentBatterId));
   };
 
-  const handleAddPlayer = () => {
+  const handleAddPlayer = async () => {
     const name = window.prompt("请输入新队员名字:");
     if (!name || !name.trim()) return;
-    const newPlayer: Player = { id: crypto.randomUUID(), name: name.trim() };
-    setPlayers((prev) => [...prev, newPlayer]);
-    setCurrentBatterId(newPlayer.id);
+
+    // 性别必填：与 CurrentUser / 状态评估女性通道契约对齐，避免无名册性别
+    const genderRaw = window.prompt("请输入性别（男 / 女）:", "女");
+    if (!genderRaw) return;
+    const normalized = genderRaw.trim();
+    const gender =
+      normalized === "男" || normalized.toLowerCase() === "male"
+        ? ("male" as const)
+        : normalized === "女" || normalized.toLowerCase() === "female"
+          ? ("female" as const)
+          : null;
+    if (!gender) {
+      window.alert("性别仅支持填写「男」或「女」。");
+      return;
+    }
+
+    const res = await loginOrRegister(name.trim(), gender, "player");
+    if (!res.success) {
+      console.error("云端被拒:", res.error);
+      window.alert(`创建队员失败：${res.error}`);
+      return;
+    }
+    setPlayers((prev) => [...prev, res.player]);
+    setCurrentBatterId(res.player.id);
   };
 
-  const handleArchiveGame = () => {
-    if (hits.length === 0 && speedRecords.length === 0) return;
-    if (!confirm("确认结束本次综合测试？当前记录将归档存查并清空盘面。")) return;
-
-    const archivedGame = appendGameArchive(hits, speedRecords);
-    const blob = new Blob([JSON.stringify(archivedGame, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `softball_test_day_${archivedGame.gameId}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-
+  // 交卷成功后由 page 调用：清空盘面与草稿（不碰排阵/录入逻辑）
+  const clearBoardAfterArchive = () => {
     setHits([]);
     setSpeedRecords([]);
     setSpeedInputs({});
@@ -277,6 +287,7 @@ export function useTestDaySession() {
   return {
     ADD_CUSTOM_TEST_PANEL_ID,
     players,
+    setPlayers,
     hits,
     speedRecords,
     speedInputs,
@@ -286,6 +297,7 @@ export function useTestDaySession() {
     setCustomTestName,
     currentBatterId,
     setCurrentBatterId,
+    clearBoardAfterArchive,
     currentResult,
     currentPitchType,
     setCurrentPitchType,
@@ -314,6 +326,5 @@ export function useTestDaySession() {
     handleUndo,
     handleClearAll,
     handleAddPlayer,
-    handleArchiveGame,
   };
 }

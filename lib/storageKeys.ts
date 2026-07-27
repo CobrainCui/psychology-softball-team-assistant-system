@@ -10,6 +10,8 @@ export const STORAGE_KEYS = {
   gamesHistory: "softball_games_history",
   readinessHistory: "softball_readiness_history",
   injuryLog: "softball_injury_log",
+  /** 女性队员上次经期开始日：playerId → YYYY-MM-DD */
+  periodStartByPlayer: "softball_period_start",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

@@ -1,12 +1,142 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import AssignmentSidebar from "@/components/test-day/AssignmentSidebar";
 import TeeBallPanel from "@/components/test-day/TeeBallPanel";
 import SpeedTestPanel from "@/components/test-day/SpeedTestPanel";
 import { useTestDaySession } from "@/hooks/useTestDaySession";
+import { getPlayers, saveTestSession } from "@/lib/actions";
+import type { HitRecord, HitResult, SpeedRecord } from "@/lib/gameArchive";
+import {
+  saveSessionDraft,
+  SESSION_DRAFT_SCHEMA_VERSION,
+} from "@/lib/sessionDraft";
+
+/** 与 Prisma HitResult / 大联盟弹道字典对齐；拒绝旧 1B/2B/3B/HR/OUT */
+const ALLOWED_HIT_RESULTS: ReadonlySet<HitResult> = new Set([
+  "LD",
+  "FB",
+  "GB",
+  "PU",
+  "MISS",
+]);
+
+function hasMeasuredSpeed(row: SpeedRecord): boolean {
+  return (
+    (typeof row.firstBaseSeconds === "number" &&
+      Number.isFinite(row.firstBaseSeconds)) ||
+    (typeof row.secondBaseSeconds === "number" &&
+      Number.isFinite(row.secondBaseSeconds)) ||
+    (typeof row.customSeconds === "number" &&
+      Number.isFinite(row.customSeconds))
+  );
+}
+
+// 推导步骤：去掉空测速；打点只保留弹道白名单 result + 云端 playerId
+function sanitizeArchivePayload(hits: HitRecord[], speedRecords: SpeedRecord[]) {
+  const cleanHits = hits.filter(
+    (hit) =>
+      typeof hit.playerId === "string" &&
+      hit.playerId.length > 0 &&
+      typeof hit.result === "string" &&
+      ALLOWED_HIT_RESULTS.has(hit.result as HitResult)
+  );
+  const cleanSpeed = speedRecords.filter(
+    (row) =>
+      typeof row.playerId === "string" &&
+      row.playerId.length > 0 &&
+      hasMeasuredSpeed(row)
+  );
+  return { hits: cleanHits, speedRecords: cleanSpeed };
+}
 
 export default function Home() {
   const session = useTestDaySession();
+  const [rosterReady, setRosterReady] = useState(false);
+
+  // 推导步骤：仅云端 getPlayers → 注入 players；成功前不渲染旧名册
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await getPlayers();
+      if (cancelled) return;
+      if (!res.success) {
+        console.error("云端被拒:", res.error);
+        setRosterReady(true);
+        return;
+      }
+      session.setPlayers(
+        res.players.map((player) => ({
+          id: player.id,
+          name: player.name,
+          gender: player.gender ?? undefined,
+          role: player.role,
+        }))
+      );
+      if (res.players[0]) session.setCurrentBatterId(res.players[0].id);
+      setRosterReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleArchiveGame = async () => {
+    if (session.hits.length === 0 && session.speedRecords.length === 0) {
+      window.alert("当前没有可归档的打点或测速记录。");
+      return;
+    }
+    if (!confirm("确认结束本次综合测试？当前记录将归档存查并清空盘面。")) {
+      return;
+    }
+
+    const cleaned = sanitizeArchivePayload(
+      session.hits,
+      session.speedRecords
+    );
+    const payload = {
+      hits: cleaned.hits,
+      speedRecords: cleaned.speedRecords,
+      assignments: session.assignments,
+      testItems: session.testItems,
+    };
+
+    const res = await saveTestSession(payload);
+    if (res.success) {
+      window.alert("云端存档成功！");
+
+      const blob = new Blob([JSON.stringify(res, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `softball_test_day_${res.gameId}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      session.clearBoardAfterArchive();
+    } else {
+      console.error("云端被拒:", res.error);
+      window.alert("云端写入失败！原因请看F12。已自动保存为本地草稿。");
+      saveSessionDraft({
+        schemaVersion: SESSION_DRAFT_SCHEMA_VERSION,
+        hits: session.hits,
+        speedRecords: session.speedRecords,
+        assignments: session.assignments,
+        testItems: session.testItems,
+      });
+    }
+  };
+
+  if (!rosterReady) {
+    return (
+      <div className="flex flex-1 items-center justify-center bg-zinc-50 p-4 text-sm text-zinc-500">
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-1 justify-center bg-zinc-50 p-4">
@@ -125,7 +255,7 @@ export default function Home() {
           </div>
 
           <button
-            onClick={session.handleArchiveGame}
+            onClick={() => void handleArchiveGame()}
             className="w-full bg-black py-4 text-base font-bold text-white transition-colors hover:bg-zinc-800"
           >
             🏁 结束本次综合测试并存档

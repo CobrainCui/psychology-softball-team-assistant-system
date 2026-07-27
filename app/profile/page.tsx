@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import {
   setStoredCurrentUser,
 } from "@/lib/currentUser";
-import { loadPlayers, savePlayers } from "@/lib/players";
 import {
   getSafeHits,
   getSafeSpeedRecords,
@@ -13,13 +12,15 @@ import {
   type GameArchive,
   type SpeedRecord,
 } from "@/lib/gameArchive";
-import { loadGamesHistory } from "@/lib/gamesHistory";
+import { updatePlayer } from "@/lib/playersApi";
+import { fetchSessions } from "@/lib/sessionsApi";
 import {
   loadPlayerInjuryLog,
   type InjuryLogEntry,
 } from "@/lib/injuryLog";
 import { loadPlayerReadinessHistory } from "@/lib/readinessHistory";
 import { useRequireAuth } from "@/lib/useRequireAuth";
+import SoftballFieldSvg from "@/components/test-day/SoftballFieldSvg";
 
 const formatPercent = (value: number): string => {
   if (!Number.isFinite(value)) return "0.0%";
@@ -119,11 +120,18 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
+    let cancelled = false;
     setDisplayName(currentUser.playerName);
-    setHistory(loadGamesHistory());
     setInjuryLog(loadPlayerInjuryLog(currentUser.playerId).slice(0, 5));
     const readiness = loadPlayerReadinessHistory(currentUser.playerId);
     setLatestReadiness(readiness[0]?.readinessScore ?? null);
+    (async () => {
+      const sessions = await fetchSessions();
+      if (!cancelled) setHistory(sessions);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [isMounted, currentUser?.playerId, currentUser?.playerName]);
 
   if (!isMounted || !currentUser) return null;
@@ -133,22 +141,20 @@ export default function ProfilePage() {
     setIsEditingName(true);
   };
 
-  const handleSaveName = () => {
+  const handleSaveName = async () => {
     const trimmedName = editNameValue.trim();
     if (!trimmedName) return;
 
+    const updated = await updatePlayer(currentUser.playerId, {
+      name: trimmedName,
+    });
+    if (!updated) {
+      window.alert("同步姓名失败，请检查网络后重试。");
+      return;
+    }
+
     const updatedUser = { ...currentUser, playerName: trimmedName };
     setStoredCurrentUser(updatedUser);
-
-    const players = loadPlayers();
-    savePlayers(
-      players.map((player) =>
-        player.id === currentUser.playerId
-          ? { ...player, name: trimmedName }
-          : player
-      )
-    );
-
     setDisplayName(trimmedName);
     setIsEditingName(false);
   };
@@ -218,6 +224,8 @@ export default function ProfilePage() {
           )}
           <p className="mt-1 text-xs uppercase tracking-wide text-zinc-400">
             {currentUser.gender === "male" ? "男" : "女"}
+            {" · "}
+            {currentUser.role === "coach" ? "教练" : "队员"}
           </p>
         </div>
 
@@ -264,31 +272,7 @@ export default function ProfilePage() {
           </label>
 
           <div className="relative w-full max-w-2xl aspect-[1.4/1] overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
-            <svg
-              viewBox="0 0 140 100"
-              className="absolute inset-0 h-full w-full pointer-events-none"
-            >
-              <path
-                d="M 70,95 L 6.4,31.4 A 90 90 0 0 1 133.6,31.4 Z"
-                fill="#f9fafb"
-                stroke="#9ca3af"
-                strokeWidth="1.5"
-              />
-              <path
-                d="M 70,95 L 38.2,63.2 A 45 45 0 0 1 101.8,63.2 Z"
-                fill="#e5e7eb"
-                stroke="#d1d5db"
-                strokeWidth="1"
-              />
-              <polygon
-                points="70,95 89.1,75.9 70,56.8 50.9,75.9"
-                fill="none"
-                stroke="#9ca3af"
-                strokeWidth="1"
-              />
-              <polygon points="70,95 72,93 72,91 68,91 68,93" fill="#4b5563" />
-              <circle cx="70" cy="75.9" r="2" fill="#4b5563" />
-            </svg>
+            <SoftballFieldSvg />
 
             {careerHits.length === 0 ? (
               <div className="absolute inset-0 flex items-center justify-center">
