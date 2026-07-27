@@ -6,6 +6,8 @@ import { isPainArea, type PainArea } from "@/lib/clinical/painAreas";
 
 export type ProbeFeedback = "A" | "B" | "C";
 
+export type SleepQuality = "good" | "normal" | "bad";
+
 export interface ReadinessHistoryEntry {
   playerId: string;
   date: string;
@@ -14,9 +16,15 @@ export interface ReadinessHistoryEntry {
   injuryPart: PainArea | null;
   injuryScore: number;
   probeFeedback: ProbeFeedback | null;
+  /** Wellness 原值；旧本地草稿可能缺失 */
+  sleepQuality?: SleepQuality | null;
+  stressScore?: number | null;
+  fatigueScore?: number | null;
+  sorenessScore?: number | null;
 }
 
-export const RECENT_INJURY_LOOKBACK_DAYS = 3;
+/** 软组织恢复常超 3 天；未探针 A 清除前持续追踪 */
+export const RECENT_INJURY_LOOKBACK_DAYS = 7;
 
 export function getTodayDateStr(today: Date = new Date()): string {
   return today.toISOString().slice(0, 10);

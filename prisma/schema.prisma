@@ -60,6 +60,69 @@ enum ProbeFeedback {
   C
 }
 
+/// 与 assessment 页面 SleepQuality 对齐
+enum SleepQuality {
+  good
+  normal
+  bad
+}
+
+/// 生理周期事件类型（球员主权数据）
+enum CycleEventType {
+  period_start
+  period_end
+  spotting
+  skip_month
+}
+
+enum CycleFlowLevel {
+  light
+  medium
+  heavy
+}
+
+/// 教练可见范围：none=仅本人；load_only=脱敏负荷；phase_label=额外阶段名（默认关）
+enum CycleSharingLevel {
+  none
+  load_only
+  phase_label
+}
+
+/// 教练端脱敏生理负荷标签（禁止暴露经期原文）
+enum PhysiologicalLoadTag {
+  recover_high
+  acl_caution
+  maintain
+  peak_ok
+  monitor_health
+}
+
+enum CycleEnergyLevel {
+  low
+  mid
+  high
+}
+
+enum CycleMoodLevel {
+  steady
+  irritable
+  low
+}
+
+enum CycleConfidence {
+  low
+  medium
+  high
+}
+
+enum CyclePhaseCode {
+  menstrual
+  follicular
+  ovulation
+  luteal
+  late_luteal
+}
+
 // ——— 组织：一支球队（未来可扩展多队，当前只种子一队） ———
 
 model Team {
@@ -88,6 +151,9 @@ model Player {
   speedRecords    SpeedRecord[]
   readinessChecks ReadinessCheck[]
   injuryLogs      InjuryLog[]
+  sessionFeedbacks SessionFeedback[]
+  cycleProfile    CycleProfile?
+  cycleEvents     CycleEvent[]
 
   @@index([teamId])
   @@index([name])
@@ -158,6 +224,20 @@ model ReadinessCheck {
   injuryPart      PainArea?
   injuryScore     Int            @default(0)
   probeFeedback   ProbeFeedback?
+  /// Wellness 原值（队内启发式输入；可复盘趋势）
+  sleepQuality    SleepQuality?
+  stressScore     Int?
+  fatigueScore    Int?
+  sorenessScore   Int?
+  /// 生理周期快照（可选；教练 API 默认不返回原始日期）
+  cycleDay               Int?
+  cyclePhaseCode         CyclePhaseCode?
+  cycleConfidence        CycleConfidence?
+  physiologicalLoadTag   PhysiologicalLoadTag?
+  crampsScore            Int?
+  cycleEnergy            CycleEnergyLevel?
+  cycleMood              CycleMoodLevel?
+  cycleIrregularFlag     Boolean           @default(false)
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
@@ -165,6 +245,43 @@ model ReadinessCheck {
 
   @@unique([playerId, date])
   @@index([playerId, date])
+}
+
+// ——— 女性生理周期：知情同意 + 事件史（权威在云端） ———
+
+model CycleProfile {
+  id                    String            @id @default(cuid())
+  playerId              String            @unique
+  trackingEnabled       Boolean           @default(false)
+  sharingLevel          CycleSharingLevel @default(none)
+  /// 有 ≥3 次经期间隔后写入中位数；冷启动可空
+  typicalLengthDays     Int?
+  hormonalContraception Boolean           @default(false)
+  /// 敏感项：需球员二次确认后才参与 RED-S 哨兵
+  bodyImageAnxietyOptIn Boolean           @default(false)
+  consentAt             DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+}
+
+model CycleEvent {
+  id          String           @id @default(cuid())
+  playerId    String
+  eventType   CycleEventType
+  date        DateTime         @db.Date
+  flowLevel   CycleFlowLevel?
+  crampsScore Int?
+  energyLevel CycleEnergyLevel?
+  moodLevel   CycleMoodLevel?
+  notes       String?
+  createdAt   DateTime         @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, date])
+  @@index([playerId, eventType, date])
 }
 
 // ——— 伤病处方归档（原 injury log） ———
@@ -181,4 +298,25 @@ model InjuryLog {
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   @@index([playerId, createdAt])
+}
+
+// ——— 训后主观负荷（Session RPE × 时长；教练日摘要用） ———
+
+model SessionFeedback {
+  id            String    @id @default(cuid())
+  playerId      String
+  schemaVersion Int       @default(1)
+  date          DateTime  @db.Date
+  sessionRpe    Int
+  durationMin   Int
+  hasPain       Boolean   @default(false)
+  painArea      PainArea?
+  note          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, date])
+  @@index([playerId, date])
 }

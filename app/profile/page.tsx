@@ -90,6 +90,7 @@ export default function ProfilePage() {
     if (!isMounted || !currentUser) return;
     let cancelled = false;
     setDisplayName(currentUser.playerName);
+    // 先用本地草稿占位，云端返回后覆盖
     setInjuryLog(loadPlayerInjuryLog(currentUser.playerId).slice(0, 5));
     const readiness = loadPlayerReadinessHistory(currentUser.playerId);
     setLatestReadiness(readiness[0]?.readinessScore ?? null);
@@ -108,6 +109,12 @@ export default function ProfilePage() {
         setHits(res.hits);
         setSpeedRecords(res.speedRecords);
         setSessionCount(res.sessionCount);
+        if (res.injuryLogs.length > 0) {
+          setInjuryLog(res.injuryLogs);
+        }
+        if (res.latestReadiness !== null) {
+          setLatestReadiness(res.latestReadiness);
+        }
       }
       setIsLoading(false);
     })();

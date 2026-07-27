@@ -1,28 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   PAIN_AREA_OPTIONS,
   PAIN_CIRCUIT_BREAKER_THRESHOLD,
+  isPainArea,
   type PainArea,
 } from "@/lib/clinical/painAreas";
+import type { ProtocolEntry } from "@/lib/clinical/prehabProtocols";
 import {
-  PREHAB_DICTIONARY,
-  type ProtocolEntry,
-} from "@/lib/clinical/prehabProtocols";
+  PREHAB_SYMPTOM_OPTIONS,
+  isPrehabSymptom,
+  prehabSymptomLabel,
+  resolvePrehabProtocol,
+  type PrehabSymptom,
+} from "@/lib/clinical/resolvePrehabProtocol";
 import { getVasBandLabel, VAS_SCALE_HINT } from "@/lib/clinical/vasBands";
 import { appendInjuryLogEntry } from "@/lib/injuryLog";
+import { saveInjuryLog } from "@/lib/actions";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import MedicalDisclaimer from "@/components/MedicalDisclaimer";
-
-type Symptom = "sharp" | "dull" | "click" | "weak";
-
-const SYMPTOM_OPTIONS: { value: Symptom; label: string }[] = [
-  { value: "sharp", label: "刺痛/拉扯感" },
-  { value: "dull", label: "隐隐钝痛" },
-  { value: "click", label: "关节弹响/卡顿" },
-  { value: "weak", label: "无力感" },
-];
 
 interface PrehabResult {
   painArea: PainArea;
@@ -30,18 +28,43 @@ interface PrehabResult {
   painScore: number;
   isSevere: boolean;
   protocol: ProtocolEntry;
+  symptom: PrehabSymptom;
 }
 
-export default function PrehabPage() {
+function PrehabPageContent() {
   const { currentUser, isMounted } = useRequireAuth();
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
   const [painArea, setPainArea] = useState<PainArea>("shoulder");
   const [painScore, setPainScore] = useState(3);
-  const [symptom, setSymptom] = useState<Symptom>("dull");
+  const [symptom, setSymptom] = useState<PrehabSymptom>("dull");
   const [result, setResult] = useState<PrehabResult | null>(null);
-  const [archiveStatus, setArchiveStatus] = useState<"idle" | "archived">(
-    "idle"
-  );
+  const [archiveStatus, setArchiveStatus] = useState<
+    "idle" | "saving" | "archived" | "local"
+  >("idle");
+  const [prefillsApplied, setPrefillsApplied] = useState(false);
+
+  // 评估页深链预填：?area=&vas=&from=assessment
+  useEffect(() => {
+    if (prefillsApplied) return;
+    const areaParam = searchParams.get("area");
+    const vasParam = searchParams.get("vas");
+    if (isPainArea(areaParam)) {
+      setPainArea(areaParam);
+    }
+    if (vasParam !== null) {
+      const vas = Number(vasParam);
+      if (Number.isFinite(vas)) {
+        setPainScore(Math.max(0, Math.min(10, Math.round(vas))));
+      }
+    }
+    const symptomParam = searchParams.get("symptom");
+    if (isPrehabSymptom(symptomParam)) {
+      setSymptom(symptomParam);
+    }
+    setPrefillsApplied(true);
+  }, [searchParams, prefillsApplied]);
 
   const handleGenerate = () => {
     const isSevere = painScore >= PAIN_CIRCUIT_BREAKER_THRESHOLD;
@@ -54,31 +77,51 @@ export default function PrehabPage() {
       painAreaLabel,
       painScore,
       isSevere,
-      protocol: PREHAB_DICTIONARY[painArea],
+      protocol: resolvePrehabProtocol(painArea, symptom),
+      symptom,
     });
     setArchiveStatus("idle");
   };
 
-  const handleArchive = () => {
-    if (!result || !currentUser) return;
+  const handleArchive = async () => {
+    if (!result || !currentUser || archiveStatus === "saving") return;
 
-    const symptomLabel =
-      SYMPTOM_OPTIONS.find((option) => option.value === symptom)?.label ?? "";
+    const symptomText = prehabSymptomLabel(result.symptom);
+    setArchiveStatus("saving");
 
-    appendInjuryLogEntry({
+    const res = await saveInjuryLog({
       playerId: currentUser.playerId,
-      playerName: currentUser.playerName,
       painArea: result.painArea,
-      painAreaLabel: result.painAreaLabel,
       painScore: result.painScore,
-      symptom: symptomLabel,
+      symptom: symptomText,
     });
 
-    setArchiveStatus("archived");
+    if (res.success) {
+      setArchiveStatus("archived");
+      window.alert("云端归档成功！");
+      if (searchParams.get("from") === "assessment") {
+        router.replace("/prehab");
+      }
+    } else {
+      console.error("云端被拒:", res.error);
+      appendInjuryLogEntry({
+        playerId: currentUser.playerId,
+        playerName: currentUser.playerName,
+        painArea: result.painArea,
+        painAreaLabel: result.painAreaLabel,
+        painScore: result.painScore,
+        symptom: symptomText,
+      });
+      setArchiveStatus("local");
+      window.alert("云端同步失败，已保存为本地草稿。");
+    }
+
     setTimeout(() => setArchiveStatus("idle"), 2000);
   };
 
   if (!isMounted || !currentUser) return null;
+
+  const fromAssessment = searchParams.get("from") === "assessment";
 
   return (
     <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
@@ -90,6 +133,11 @@ export default function PrehabPage() {
           <p className="mt-1 text-xs text-zinc-400">
             当前球员：{currentUser.playerName}
           </p>
+          {fromAssessment && (
+            <p className="mt-1 text-xs text-amber-700">
+              已从综合状态评估预填部位与 VAS，请确认症状后生成处方。
+            </p>
+          )}
         </div>
 
         <MedicalDisclaimer />
@@ -145,15 +193,18 @@ export default function PrehabPage() {
             <label className="text-xs uppercase text-gray-500">症状特征</label>
             <select
               value={symptom}
-              onChange={(e) => setSymptom(e.target.value as Symptom)}
+              onChange={(e) => setSymptom(e.target.value as PrehabSymptom)}
               className="border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
             >
-              {SYMPTOM_OPTIONS.map((option) => (
+              {PREHAB_SYMPTOM_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
               ))}
             </select>
+            <p className="text-xs leading-relaxed text-zinc-400">
+              刺痛/弹响将提高转诊权重并禁止高强度激活；无力感优先动力链减负。
+            </p>
           </div>
         </div>
 
@@ -161,13 +212,13 @@ export default function PrehabPage() {
           onClick={handleGenerate}
           className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800"
         >
-          ⚠️ 生成运动损伤与预防处方
+          生成运动损伤与预防处方
         </button>
 
         {result && result.isSevere && (
           <div className="border-2 border-red-700 bg-red-600 p-4 text-white">
             <p className="text-center text-base font-semibold leading-relaxed">
-              🚨 疼痛等级突破阈值（≥{PAIN_CIRCUIT_BREAKER_THRESHOLD}），立刻停止一切训练，介入专业运动医学诊断。
+              疼痛等级突破阈值（≥{PAIN_CIRCUIT_BREAKER_THRESHOLD}），立刻停止一切训练，介入专业运动医学诊断。
             </p>
             <p className="mt-2 text-center text-sm opacity-90">
               {getVasBandLabel(result.painScore)}
@@ -179,7 +230,8 @@ export default function PrehabPage() {
           <div className="flex flex-col gap-3 border-2 border-zinc-900 p-4">
             <div className="text-xs uppercase text-zinc-400">
               部位：{result.painAreaLabel} · VAS {result.painScore} / 10 ·{" "}
-              {getVasBandLabel(result.painScore)}
+              {getVasBandLabel(result.painScore)} ·{" "}
+              {prehabSymptomLabel(result.symptom)}
             </div>
 
             {result.protocol.type === "specific" ? (
@@ -221,16 +273,35 @@ export default function PrehabPage() {
             )}
 
             <button
-              onClick={handleArchive}
-              className="mt-1 w-full border border-zinc-900 py-2 text-xs text-zinc-900 transition-colors hover:bg-zinc-900 hover:text-white"
+              onClick={() => void handleArchive()}
+              disabled={archiveStatus === "saving"}
+              className="mt-1 w-full border border-zinc-900 py-2 text-xs text-zinc-900 transition-colors hover:bg-zinc-900 hover:text-white disabled:opacity-40"
             >
-              {archiveStatus === "archived"
-                ? "✅ 已归档"
-                : "💾 将处方归档至个人伤病史"}
+              {archiveStatus === "saving"
+                ? "归档中…"
+                : archiveStatus === "archived"
+                  ? "已云端归档"
+                  : archiveStatus === "local"
+                    ? "已存本地草稿"
+                    : "将处方归档至个人伤病史"}
             </button>
           </div>
         )}
       </main>
     </div>
+  );
+}
+
+export default function PrehabPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6 text-sm text-zinc-400">
+          加载中…
+        </div>
+      }
+    >
+      <PrehabPageContent />
+    </Suspense>
   );
 }

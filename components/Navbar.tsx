@@ -4,10 +4,20 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { clearStoredCurrentUser, useCurrentUser } from "@/lib/currentUser";
 
-const NAV_LINKS = [
+const PLAYER_NAV_LINKS = [
+  { href: "/", label: "测试清单" },
+  { href: "/assessment", label: "综合状态评估" },
+  { href: "/feedback", label: "训后反馈" },
+  { href: "/prehab", label: "伤病预防" },
+  { href: "/profile", label: "个人档案" },
+];
+
+/** 教练不录入训后反馈，只在摘要里看队员记录 */
+const COACH_NAV_LINKS = [
   { href: "/", label: "测试清单" },
   { href: "/assessment", label: "综合状态评估" },
   { href: "/prehab", label: "伤病预防" },
+  { href: "/coach", label: "教练摘要" },
   { href: "/profile", label: "个人档案" },
 ];
 
@@ -22,6 +32,11 @@ export default function Navbar() {
   // Session 来自登录页写入的 softball_currentUser（云端 Player 精简凭证）
   const { currentUser, isMounted } = useCurrentUser();
   const router = useRouter();
+
+  const navLinks =
+    isMounted && currentUser?.role === "coach"
+      ? COACH_NAV_LINKS
+      : PLAYER_NAV_LINKS;
 
   const handleNavClick = (
     e: React.MouseEvent<HTMLAnchorElement>,
@@ -42,7 +57,7 @@ export default function Navbar() {
       <span className="shrink-0 text-xl font-bold">Softball AI Engine</span>
 
       <div className="flex flex-1 flex-wrap items-center justify-evenly gap-4 md:gap-8">
-        {NAV_LINKS.map((link) => (
+        {navLinks.map((link) => (
           <Link
             key={link.href}
             href={link.href}

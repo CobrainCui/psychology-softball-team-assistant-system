@@ -10,6 +10,8 @@ export const STORAGE_KEYS = {
   gamesHistory: "softball_games_history",
   readinessHistory: "softball_readiness_history",
   injuryLog: "softball_injury_log",
+  /** 训后 session RPE 本地草稿（云端权威） */
+  sessionFeedback: "softball_session_feedback",
   /** 女性队员上次经期开始日：playerId → YYYY-MM-DD */
   periodStartByPlayer: "softball_period_start",
 } as const;

@@ -29,8 +29,9 @@ npx prisma studio
 |--------|-------------|
 | `Team` + `Player` | `lib/players.ts` |
 | `TestSession` + `Hit` + `SpeedRecord` | `lib/gameArchive.ts` |
-| `ReadinessCheck` | `lib/readinessHistory.ts` |
-| `InjuryLog` | `lib/injuryLog.ts` |
+| `ReadinessCheck` | `lib/readinessHistory.ts`（含 sleep/stress/fatigue/soreness） |
+| `InjuryLog` | `lib/injuryLog.ts` + `saveInjuryLog` / 档案聚合 |
+| `SessionFeedback` | `lib/sessionFeedback.ts` + `/feedback` → 教练摘要 |
 
 `Player.role`：`player` | `coach`（P0 极简身份）
 

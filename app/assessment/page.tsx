@@ -10,15 +10,12 @@ import {
   type PainArea,
 } from "@/lib/clinical/painAreas";
 import {
-  getCyclePhase,
-  getFemaleCyclePenalty,
-} from "@/lib/clinical/cyclePhase";
-import {
   ACL_PREVENTION_CUES,
+  CYCLE_CONSENT_POINTS,
   FEMALE_HEALTH_RED_FLAGS,
-  getCycleGuidance,
   type CycleGuidance,
 } from "@/lib/clinical/cycleGuidance";
+import { buildCycleAssessmentBundle } from "@/lib/clinical/buildCycleAssessment";
 import {
   COMPENSATION_ACTIVATION_DICTIONARY,
   INJURY_WARMUP_DICTIONARY,
@@ -31,23 +28,42 @@ import {
   upsertReadinessEntry,
   type ProbeFeedback,
   type ReadinessHistoryEntry,
+  type SleepQuality,
 } from "@/lib/readinessHistory";
 import {
+  consentToCycleTracking,
+  getCycleProfile,
   getReadinessHistory,
+  recordPeriodStart,
   saveReadinessAssessment,
+  updateCycleProfileSettings,
 } from "@/lib/actions";
+import type {
+  CycleEnergyLevel,
+  CycleMoodLevel,
+  CycleProfileDto,
+  CycleSharingLevel,
+} from "@/lib/cycleTypes";
 import {
   getPeriodStartDate,
   setPeriodStartDate as persistPeriodStartDate,
 } from "@/lib/periodStart";
-
-type SleepQuality = "good" | "normal" | "bad";
+import Link from "next/link";
 
 const SLEEP_OPTIONS: { value: SleepQuality; label: string }[] = [
   { value: "good", label: "极佳 (8h 以上)" },
   { value: "normal", label: "普通 (6-8h)" },
   { value: "bad", label: "糟糕 (<6h / 失眠)" },
 ];
+
+function buildPrehabHref(area: PainArea, vas: number): string {
+  const params = new URLSearchParams({
+    area,
+    vas: String(vas),
+    from: "assessment",
+  });
+  return `/prehab?${params.toString()}`;
+}
 
 type AssessmentPainArea = Exclude<PainArea, "wrist">;
 
@@ -85,8 +101,10 @@ interface ReadinessResult {
   tier: ReadinessTier;
   cyclePhaseLabel: string | null;
   cycleGuidance: CycleGuidance | null;
+  cycleConfidence: string | null;
   showAclCues: boolean;
   showFemaleRedFlags: boolean;
+  redsReasons: string[];
   vasBandLabel: string | null;
   redReason: "newInjury" | "probe" | null;
   newInjuryAreaLabel: string | null;
@@ -103,6 +121,13 @@ export default function AssessmentPage() {
   const [sorenessScore, setSorenessScore] = useState(3);
   const [periodStartDate, setPeriodStartDate] = useState("");
   const [cycleIrregular, setCycleIrregular] = useState(false);
+  const [cycleProfile, setCycleProfile] = useState<CycleProfileDto | null>(
+    null
+  );
+  const [crampsScore, setCrampsScore] = useState(0);
+  const [cycleEnergy, setCycleEnergy] = useState<CycleEnergyLevel | null>(null);
+  const [cycleMood, setCycleMood] = useState<CycleMoodLevel | null>(null);
+  const [consentBusy, setConsentBusy] = useState(false);
 
   const [hasNewInjury, setHasNewInjury] = useState(false);
   const [newInjuryArea, setNewInjuryArea] =
@@ -120,20 +145,35 @@ export default function AssessmentPage() {
     let cancelled = false;
     setIsLoadingHistory(true);
     if (currentUser.gender === "female") {
-      setPeriodStartDate(getPeriodStartDate(currentUser.playerId));
+      const localStart = getPeriodStartDate(currentUser.playerId);
+      setPeriodStartDate(localStart);
     }
 
     (async () => {
-      // Session 凭证字段为 playerId（非 id）
-      const res = await getReadinessHistory(currentUser.playerId);
+      const readinessRes = await getReadinessHistory(currentUser.playerId);
       if (cancelled) return;
-      if (!res.success) {
-        console.error("云端被拒:", res.error);
+      if (!readinessRes.success) {
+        console.error("云端被拒:", readinessRes.error);
         setHistory([]);
       } else {
-        setHistory(res.history);
+        setHistory(readinessRes.history);
       }
-      setIsLoadingHistory(false);
+
+      if (currentUser.gender === "female") {
+        const cycleRes = await getCycleProfile(currentUser.playerId);
+        if (!cancelled && cycleRes.success) {
+          setCycleProfile(cycleRes.profile);
+          if (cycleRes.profile?.lastPeriodStart) {
+            setPeriodStartDate(cycleRes.profile.lastPeriodStart);
+            persistPeriodStartDate(
+              currentUser.playerId,
+              cycleRes.profile.lastPeriodStart
+            );
+          }
+        }
+      }
+
+      if (!cancelled) setIsLoadingHistory(false);
     })();
 
     return () => {
@@ -142,6 +182,9 @@ export default function AssessmentPage() {
   }, [isMounted, currentUser?.playerId, currentUser?.gender]);
 
   const isFemale = isMounted && currentUser?.gender === "female";
+  const cycleTracking =
+    Boolean(cycleProfile?.consentAt) && Boolean(cycleProfile?.trackingEnabled);
+
   const recentInjuryRaw = findRecentInjuryPart(history);
   const recentInjuryPart: AssessmentPainArea | null =
     recentInjuryRaw && recentInjuryRaw !== "wrist" ? recentInjuryRaw : null;
@@ -152,24 +195,53 @@ export default function AssessmentPage() {
     setProbeFeedback(null);
   }, [recentInjuryPart]);
 
+  const resolveCycleBundle = () =>
+    buildCycleAssessmentBundle({
+      profile: isFemale ? cycleProfile : null,
+      periodStartDate,
+      symptoms: {
+        crampsScore,
+        cycleEnergy,
+        cycleMood,
+        cycleIrregular,
+      },
+      fatigueScore,
+      sorenessScore,
+      recentSleep: history
+        .slice(0, 30)
+        .map((h) => h.sleepQuality)
+        .filter((s): s is SleepQuality => s != null),
+      recentFatigue: history
+        .slice(0, 30)
+        .map((h) => h.fatigueScore)
+        .filter((n): n is number => typeof n === "number"),
+    });
+
   // 超级状态融合：Hooper 式维度（睡眠/压力/疲劳/酸痛）+ 周期负荷 + 历史探针
   const handleGenerate = () => {
     void (async () => {
     const isProbeCritical = recentInjuryPart !== null && probeFeedback === "C";
-
-    const phase =
-      isFemale && periodStartDate ? getCyclePhase(periodStartDate) : null;
-    const cycleGuidance = phase ? getCycleGuidance(phase) : null;
+    const cycleBundle = resolveCycleBundle();
+    const {
+      phase,
+      guidance: cycleGuidance,
+      penalty,
+      reds,
+      showAclCues,
+      showFemaleRedFlags,
+    } = cycleBundle;
 
     if (isNewInjuryCritical || isProbeCritical) {
-      await archiveToday(0);
+      await archiveToday(0, cycleBundle);
       setResult({
         score: 0,
         tier: "red",
         cyclePhaseLabel: phase?.label ?? null,
         cycleGuidance,
-        showAclCues: Boolean(phase?.isOvulation),
-        showFemaleRedFlags: isFemale && cycleIrregular,
+        cycleConfidence: phase?.confidence ?? null,
+        showAclCues,
+        showFemaleRedFlags,
+        redsReasons: reds.reasons,
         vasBandLabel: isNewInjuryCritical
           ? getVasBandLabel(newInjuryScore)
           : null,
@@ -192,9 +264,7 @@ export default function AssessmentPage() {
     if (sorenessScore > 7) score -= 15;
     else if (sorenessScore >= 5) score -= 8;
 
-    if (phase) {
-      score -= getFemaleCyclePenalty(phase, Math.max(fatigueScore, sorenessScore));
-    }
+    score -= penalty;
 
     const isProbeCaution = recentInjuryPart !== null && probeFeedback === "B";
     if (isProbeCaution) score -= 15;
@@ -202,21 +272,27 @@ export default function AssessmentPage() {
     score = Math.max(0, Math.min(100, score));
 
     const needsCaution =
-      hasNewInjury || isProbeCaution || (isFemale && cycleIrregular);
+      hasNewInjury ||
+      isProbeCaution ||
+      (isFemale && cycleTracking && (cycleIrregular || reds.triggered));
     let tier: ReadinessTier = score >= 70 ? "green" : "yellow";
     if (needsCaution && tier === "green") tier = "yellow";
     // 排卵期即便高分也不给全力变向绿灯（ACL 安全帽）
-    if (phase?.isOvulation && tier === "green") tier = "yellow";
+    if (phase?.isOvulation && !phase.hidePhaseLabels && tier === "green") {
+      tier = "yellow";
+    }
 
-    await archiveToday(score);
+    await archiveToday(score, cycleBundle);
 
     setResult({
       score,
       tier,
       cyclePhaseLabel: phase?.label ?? null,
       cycleGuidance,
-      showAclCues: Boolean(phase?.isOvulation),
-      showFemaleRedFlags: isFemale && cycleIrregular,
+      cycleConfidence: phase?.confidence ?? null,
+      showAclCues,
+      showFemaleRedFlags,
+      redsReasons: reds.reasons,
       vasBandLabel: hasNewInjury ? getVasBandLabel(newInjuryScore) : null,
       redReason: null,
       newInjuryAreaLabel: hasNewInjury ? PAIN_AREA_LABEL[newInjuryArea] : null,
@@ -230,7 +306,10 @@ export default function AssessmentPage() {
     })();
   };
 
-  const archiveToday = async (score: number) => {
+  const archiveToday = async (
+    score: number,
+    cycleBundle = resolveCycleBundle()
+  ) => {
     if (!currentUser) return;
 
     let nextInjuryPart: PainArea | null = recentInjuryPart;
@@ -248,6 +327,10 @@ export default function AssessmentPage() {
       injuryPart: nextInjuryPart,
       injuryScore: hasNewInjury ? newInjuryScore : 0,
       probeFeedback: recentInjuryPart !== null ? probeFeedback : null,
+      sleepQuality,
+      stressScore,
+      fatigueScore,
+      sorenessScore,
     };
 
     const payload = {
@@ -256,6 +339,16 @@ export default function AssessmentPage() {
       stressScore,
       fatigueScore,
       sorenessScore,
+      cycleDay: cycleBundle.phase?.dayOfCycle ?? null,
+      cyclePhaseCode: cycleBundle.phase?.hidePhaseLabels
+        ? null
+        : (cycleBundle.phase?.code ?? null),
+      cycleConfidence: cycleBundle.phase?.confidence ?? null,
+      physiologicalLoadTag: cycleBundle.loadTag,
+      crampsScore: cycleTracking ? crampsScore : null,
+      cycleEnergy: cycleTracking ? cycleEnergy : null,
+      cycleMood: cycleTracking ? cycleMood : null,
+      cycleIrregularFlag: cycleTracking ? cycleIrregular : false,
     };
 
     const res = await saveReadinessAssessment(payload);
@@ -286,11 +379,67 @@ export default function AssessmentPage() {
     }
   };
 
+  const handleConsent = async (shareWithCoach: boolean) => {
+    if (!currentUser) return;
+    setConsentBusy(true);
+    const sharingLevel: CycleSharingLevel = shareWithCoach
+      ? "load_only"
+      : "none";
+    const res = await consentToCycleTracking({
+      playerId: currentUser.playerId,
+      sharingLevel,
+      seedPeriodStart: periodStartDate || undefined,
+    });
+    setConsentBusy(false);
+    if (!res.success) {
+      window.alert(res.error);
+      return;
+    }
+    setCycleProfile(res.profile);
+  };
+
+  const handleDisableTracking = async () => {
+    if (!currentUser) return;
+    const res = await updateCycleProfileSettings({
+      playerId: currentUser.playerId,
+      trackingEnabled: false,
+    });
+    if (!res.success) {
+      window.alert(res.error);
+      return;
+    }
+    setCycleProfile(res.profile);
+  };
+
+  const handlePeriodDateChange = async (next: string) => {
+    setPeriodStartDate(next);
+    if (!currentUser) return;
+    persistPeriodStartDate(currentUser.playerId, next);
+    if (!cycleTracking || !next) return;
+    const res = await recordPeriodStart({
+      playerId: currentUser.playerId,
+      date: next,
+      crampsScore,
+    });
+    if (res.success) setCycleProfile(res.profile);
+  };
+
+  const patchCycleSettings = async (
+    patch: Omit<Parameters<typeof updateCycleProfileSettings>[0], "playerId">
+  ) => {
+    if (!currentUser) return;
+    const res = await updateCycleProfileSettings({
+      ...patch,
+      playerId: currentUser.playerId,
+    });
+    if (res.success) setCycleProfile(res.profile);
+    else window.alert(res.error);
+  };
+
   if (!isMounted || !currentUser) return null;
 
   const canGenerate =
     !isLoadingHistory &&
-    (!isFemale || Boolean(periodStartDate)) &&
     (recentInjuryPart === null || probeFeedback !== null);
 
   return (
@@ -385,59 +534,257 @@ export default function AssessmentPage() {
         </div>
 
         {isFemale && (
-          <div className="flex flex-col gap-2 border border-zinc-200 p-4">
-            <label className="text-xs uppercase text-gray-500">生理周期监测</label>
-            <div className="flex flex-col gap-1">
-              <span className="text-xs text-zinc-400">上次经期开始日</span>
-              <input
-                type="date"
-                value={periodStartDate}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setPeriodStartDate(next);
-                  if (currentUser) {
-                    persistPeriodStartDate(currentUser.playerId, next);
-                  }
-                }}
-                className="border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
-              />
-            </div>
-            <p className="text-xs leading-relaxed text-zinc-400">
-              系统自动推算所处阶段：经期 1-5 天 · 卵泡 6-13 天 · 排卵 14-16 天 · 黄体 17-28 天。
-            </p>
-            <div className="flex items-center justify-between gap-2 border-t border-zinc-200 pt-3">
-              <span className="text-xs text-zinc-500">
-                近 3 个月月经是否大致规律？
-              </span>
-              <div className="flex gap-1">
-                <button
-                  type="button"
-                  onClick={() => setCycleIrregular(false)}
-                  className={`border px-3 py-1 text-xs transition-colors ${
-                    !cycleIrregular
-                      ? "border-zinc-900 bg-zinc-900 text-white"
-                      : "border-zinc-300 text-zinc-500 hover:bg-zinc-100"
-                  }`}
-                >
-                  规律
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCycleIrregular(true)}
-                  className={`border px-3 py-1 text-xs transition-colors ${
-                    cycleIrregular
-                      ? "border-amber-600 bg-amber-600 text-white"
-                      : "border-zinc-300 text-zinc-500 hover:bg-zinc-100"
-                  }`}
-                >
-                  不规律/长期未来潮
-                </button>
+          <div className="flex flex-col gap-3 border border-zinc-200 p-4">
+            <label className="text-xs uppercase text-gray-500">
+              生理周期监测（自愿）
+            </label>
+
+            {!cycleTracking ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs leading-relaxed text-zinc-500">
+                  开启后用于个人负荷参考。不开启不影响准备度打卡与上场。
+                </p>
+                <ul className="list-inside list-disc text-xs leading-relaxed text-zinc-500">
+                  {CYCLE_CONSENT_POINTS.map((point) => (
+                    <li key={point}>{point}</li>
+                  ))}
+                </ul>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-zinc-400">
+                    可选：上次经期开始日（可稍后填写）
+                  </span>
+                  <input
+                    type="date"
+                    value={periodStartDate}
+                    onChange={(e) => {
+                      setPeriodStartDate(e.target.value);
+                      if (currentUser) {
+                        persistPeriodStartDate(
+                          currentUser.playerId,
+                          e.target.value
+                        );
+                      }
+                    }}
+                    className="border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={consentBusy}
+                    onClick={() => void handleConsent(false)}
+                    className="border border-zinc-900 bg-zinc-900 px-3 py-1.5 text-xs text-white disabled:opacity-40"
+                  >
+                    同意并仅本人可见
+                  </button>
+                  <button
+                    type="button"
+                    disabled={consentBusy}
+                    onClick={() => void handleConsent(true)}
+                    className="border border-zinc-300 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100 disabled:opacity-40"
+                  >
+                    同意并分享脱敏负荷给教练
+                  </button>
+                </div>
               </div>
-            </div>
-            {cycleIrregular && (
-              <p className="text-xs leading-relaxed text-amber-700">
-                提示：月经长期不规律可能与低能量可用性（RED-S）相关，建议优先提高能量摄入并转介专业医疗，而非仅靠减训硬撑。
-              </p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-zinc-400">上次经期开始日</span>
+                  <input
+                    type="date"
+                    value={periodStartDate}
+                    onChange={(e) => {
+                      void handlePeriodDateChange(e.target.value);
+                    }}
+                    className="border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
+                  />
+                </div>
+                <p className="text-xs leading-relaxed text-zinc-400">
+                  典型周期约 {cycleProfile?.resolvedLengthDays ?? 28} 天 · 置信度{" "}
+                  {cycleProfile?.confidence ?? "low"}
+                  {cycleProfile?.highVariance ? " · 波动偏大，阶段标签已降级" : ""}
+                  {cycleProfile?.hormonalContraception
+                    ? " · 已标记激素避孕，以症状驱动为主"
+                    : ""}
+                </p>
+
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs text-zinc-500">
+                    今日痛经 (0 无 / 10 极重)
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={10}
+                    step={1}
+                    value={crampsScore}
+                    onChange={(e) => setCrampsScore(Number(e.target.value))}
+                    className="accent-zinc-900"
+                  />
+                  <span className="text-right font-mono text-sm text-zinc-900">
+                    {crampsScore}
+                  </span>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-zinc-500">今日能量</span>
+                  <div className="flex gap-1">
+                    {(
+                      [
+                        ["low", "低"],
+                        ["mid", "中"],
+                        ["high", "高"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() =>
+                          setCycleEnergy((prev) =>
+                            prev === value ? null : value
+                          )
+                        }
+                        className={`flex-1 border py-1.5 text-xs ${
+                          cycleEnergy === value
+                            ? "border-zinc-900 bg-zinc-900 text-white"
+                            : "border-zinc-300 text-zinc-500"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-zinc-500">今日情绪（仅本人）</span>
+                  <div className="flex gap-1">
+                    {(
+                      [
+                        ["steady", "平稳"],
+                        ["irritable", "易烦"],
+                        ["low", "低落"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() =>
+                          setCycleMood((prev) =>
+                            prev === value ? null : value
+                          )
+                        }
+                        className={`flex-1 border py-1.5 text-xs ${
+                          cycleMood === value
+                            ? "border-zinc-900 bg-zinc-900 text-white"
+                            : "border-zinc-300 text-zinc-500"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 border-t border-zinc-200 pt-3">
+                  <span className="text-xs text-zinc-500">
+                    近 3 个月月经是否大致规律？
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setCycleIrregular(false)}
+                      className={`border px-3 py-1 text-xs transition-colors ${
+                        !cycleIrregular
+                          ? "border-zinc-900 bg-zinc-900 text-white"
+                          : "border-zinc-300 text-zinc-500 hover:bg-zinc-100"
+                      }`}
+                    >
+                      规律
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCycleIrregular(true)}
+                      className={`border px-3 py-1 text-xs transition-colors ${
+                        cycleIrregular
+                          ? "border-amber-600 bg-amber-600 text-white"
+                          : "border-zinc-300 text-zinc-500 hover:bg-zinc-100"
+                      }`}
+                    >
+                      不规律/长期未来潮
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 border-t border-zinc-200 pt-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void patchCycleSettings({
+                        hormonalContraception:
+                          !cycleProfile?.hormonalContraception,
+                      })
+                    }
+                    className={`border px-3 py-1 text-xs ${
+                      cycleProfile?.hormonalContraception
+                        ? "border-zinc-900 bg-zinc-900 text-white"
+                        : "border-zinc-300 text-zinc-600"
+                    }`}
+                  >
+                    激素避孕/无规律出血
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void patchCycleSettings({
+                        sharingLevel:
+                          cycleProfile?.sharingLevel === "none"
+                            ? "load_only"
+                            : "none",
+                      })
+                    }
+                    className={`border px-3 py-1 text-xs ${
+                      cycleProfile?.sharingLevel !== "none"
+                        ? "border-zinc-900 bg-zinc-900 text-white"
+                        : "border-zinc-300 text-zinc-600"
+                    }`}
+                  >
+                    {cycleProfile?.sharingLevel !== "none"
+                      ? "已分享脱敏负荷"
+                      : "分享脱敏负荷给教练"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void patchCycleSettings({
+                        bodyImageAnxietyOptIn:
+                          !cycleProfile?.bodyImageAnxietyOptIn,
+                      })
+                    }
+                    className={`border px-3 py-1 text-xs ${
+                      cycleProfile?.bodyImageAnxietyOptIn
+                        ? "border-amber-600 bg-amber-600 text-white"
+                        : "border-zinc-300 text-zinc-600"
+                    }`}
+                  >
+                    饮食/体重持续焦虑（敏感·可选）
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDisableTracking()}
+                    className="border border-zinc-300 px-3 py-1 text-xs text-zinc-500"
+                  >
+                    关闭追踪
+                  </button>
+                </div>
+
+                {cycleIrregular && (
+                  <p className="text-xs leading-relaxed text-amber-700">
+                    提示：月经长期不规律可能与低能量可用性（RED-S）相关，建议优先提高能量摄入并转介专业医疗，而非仅靠减训硬撑。
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -574,7 +921,14 @@ export default function AssessmentPage() {
         {result && (
           <div className={`border-2 p-4 ${TIER_META[result.tier].classes}`}>
             <div className="flex flex-col gap-1 text-xs uppercase opacity-60">
-              {result.cyclePhaseLabel && <span>推算生理阶段：{result.cyclePhaseLabel}</span>}
+              {result.cyclePhaseLabel && (
+                <span>
+                  推算生理阶段：{result.cyclePhaseLabel}
+                  {result.cycleConfidence
+                    ? ` · 置信度 ${result.cycleConfidence}`
+                    : ""}
+                </span>
+              )}
               {result.newInjuryAreaLabel && (
                 <span>新发伤病：{result.newInjuryAreaLabel}</span>
               )}
@@ -639,18 +993,28 @@ export default function AssessmentPage() {
                 <p className="text-xs font-semibold uppercase text-amber-800">
                   女性健康早期警示（须转介，非诊断）
                 </p>
-                <ul className="mt-2 list-inside list-disc text-sm leading-relaxed">
+                {result.redsReasons.length > 0 && (
+                  <ul className="mt-2 list-inside list-disc text-sm leading-relaxed">
+                    {result.redsReasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                )}
+                <ul className="mt-2 list-inside list-disc text-sm leading-relaxed opacity-80">
                   {FEMALE_HEALTH_RED_FLAGS.map((flag) => (
                     <li key={flag}>{flag}</li>
                   ))}
                 </ul>
+                <p className="mt-2 text-xs opacity-70">
+                  优先提高能量可用性并寻求专业医疗/营养支持，系统不会因此自动禁赛。
+                </p>
               </div>
             )}
 
             {result.tier === "red" && (
               <div className="mt-4 border border-white/40 p-3">
                 <p className="text-sm font-semibold uppercase tracking-wide">
-                  🚨 红牌警告 · 伤病熔断
+                  红牌警告 · 伤病熔断
                 </p>
                 <p className="mt-2 text-sm leading-relaxed">
                   {result.redReason === "probe"
@@ -660,6 +1024,25 @@ export default function AssessmentPage() {
                 </p>
               </div>
             )}
+
+            {result.tier !== "red" &&
+              hasNewInjury &&
+              result.newInjuryAreaLabel && (
+                <div className="mt-4 border border-zinc-400 p-3">
+                  <p className="text-xs font-semibold uppercase opacity-70">
+                    伤病处方闭环
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed">
+                    已记录新发「{result.newInjuryAreaLabel}」不适。可生成该部位预防处方并归档至个人伤病史。
+                  </p>
+                  <Link
+                    href={buildPrehabHref(newInjuryArea, newInjuryScore)}
+                    className="mt-2 inline-block border border-current px-3 py-1.5 text-xs transition-colors hover:bg-zinc-900 hover:text-white"
+                  >
+                    生成该部位伤病处方
+                  </Link>
+                </div>
+              )}
 
             {result.tier === "yellow" && (
               <div className="mt-4 flex flex-col gap-3">
