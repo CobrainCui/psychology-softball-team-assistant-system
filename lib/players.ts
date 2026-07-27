@@ -19,9 +19,6 @@ export interface Player {
   role?: PlayerRole;
 }
 
-// 无默认种子队员；名册由登录页 / 侧边栏新建写入云端
-export const DEFAULT_PLAYERS: Player[] = [];
-
 export function normalizePlayerRole(role: unknown): PlayerRole {
   return role === "coach" ? "coach" : "player";
 }

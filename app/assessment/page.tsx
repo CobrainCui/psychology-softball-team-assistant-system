@@ -28,11 +28,14 @@ import { getVasBandLabel, VAS_SCALE_HINT } from "@/lib/clinical/vasBands";
 import {
   findRecentInjuryPart,
   getTodayDateStr,
-  loadPlayerReadinessHistory,
+  upsertReadinessEntry,
   type ProbeFeedback,
   type ReadinessHistoryEntry,
-  upsertReadinessEntry,
 } from "@/lib/readinessHistory";
+import {
+  getReadinessHistory,
+  saveReadinessAssessment,
+} from "@/lib/actions";
 import {
   getPeriodStartDate,
   setPeriodStartDate as persistPeriodStartDate,
@@ -107,16 +110,35 @@ export default function AssessmentPage() {
   const [newInjuryScore, setNewInjuryScore] = useState(3);
 
   const [history, setHistory] = useState<ReadinessHistoryEntry[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [probeFeedback, setProbeFeedback] = useState<ProbeFeedback | null>(null);
 
   const [result, setResult] = useState<ReadinessResult | null>(null);
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
-    setHistory(loadPlayerReadinessHistory(currentUser.playerId));
+    let cancelled = false;
+    setIsLoadingHistory(true);
     if (currentUser.gender === "female") {
       setPeriodStartDate(getPeriodStartDate(currentUser.playerId));
     }
+
+    (async () => {
+      // Session 凭证字段为 playerId（非 id）
+      const res = await getReadinessHistory(currentUser.playerId);
+      if (cancelled) return;
+      if (!res.success) {
+        console.error("云端被拒:", res.error);
+        setHistory([]);
+      } else {
+        setHistory(res.history);
+      }
+      setIsLoadingHistory(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [isMounted, currentUser?.playerId, currentUser?.gender]);
 
   const isFemale = isMounted && currentUser?.gender === "female";
@@ -132,6 +154,7 @@ export default function AssessmentPage() {
 
   // 超级状态融合：Hooper 式维度（睡眠/压力/疲劳/酸痛）+ 周期负荷 + 历史探针
   const handleGenerate = () => {
+    void (async () => {
     const isProbeCritical = recentInjuryPart !== null && probeFeedback === "C";
 
     const phase =
@@ -139,7 +162,7 @@ export default function AssessmentPage() {
     const cycleGuidance = phase ? getCycleGuidance(phase) : null;
 
     if (isNewInjuryCritical || isProbeCritical) {
-      archiveToday(0);
+      await archiveToday(0);
       setResult({
         score: 0,
         tier: "red",
@@ -185,7 +208,7 @@ export default function AssessmentPage() {
     // 排卵期即便高分也不给全力变向绿灯（ACL 安全帽）
     if (phase?.isOvulation && tier === "green") tier = "yellow";
 
-    archiveToday(score);
+    await archiveToday(score);
 
     setResult({
       score,
@@ -204,9 +227,10 @@ export default function AssessmentPage() {
         ? COMPENSATION_ACTIVATION_DICTIONARY[recentInjuryPart!]
         : null,
     });
+    })();
   };
 
-  const archiveToday = (score: number) => {
+  const archiveToday = async (score: number) => {
     if (!currentUser) return;
 
     let nextInjuryPart: PainArea | null = recentInjuryPart;
@@ -226,13 +250,46 @@ export default function AssessmentPage() {
       probeFeedback: recentInjuryPart !== null ? probeFeedback : null,
     };
 
-    upsertReadinessEntry(entry);
-    setHistory(loadPlayerReadinessHistory(currentUser.playerId));
+    const payload = {
+      ...entry,
+      sleepQuality,
+      stressScore,
+      fatigueScore,
+      sorenessScore,
+    };
+
+    const res = await saveReadinessAssessment(payload);
+    if (res.success) {
+      window.alert("云端打卡成功！");
+      setHistory((prev) => {
+        const withoutSameDay = prev.filter(
+          (item) =>
+            !(item.playerId === entry.playerId && item.date === entry.date)
+        );
+        return [entry, ...withoutSameDay].sort((a, b) =>
+          b.date.localeCompare(a.date)
+        );
+      });
+    } else {
+      console.error("云端被拒:", res.error);
+      window.alert("云端同步失败，已保存为本地草稿。");
+      upsertReadinessEntry(entry);
+      setHistory((prev) => {
+        const withoutSameDay = prev.filter(
+          (item) =>
+            !(item.playerId === entry.playerId && item.date === entry.date)
+        );
+        return [entry, ...withoutSameDay].sort((a, b) =>
+          b.date.localeCompare(a.date)
+        );
+      });
+    }
   };
 
   if (!isMounted || !currentUser) return null;
 
   const canGenerate =
+    !isLoadingHistory &&
     (!isFemale || Boolean(periodStartDate)) &&
     (recentInjuryPart === null || probeFeedback !== null);
 

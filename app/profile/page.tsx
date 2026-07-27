@@ -1,19 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { setStoredCurrentUser } from "@/lib/currentUser";
 import {
-  setStoredCurrentUser,
-} from "@/lib/currentUser";
-import {
-  getSafeHits,
-  getSafeSpeedRecords,
   type HitRecord,
   type HitResult,
-  type GameArchive,
   type SpeedRecord,
 } from "@/lib/gameArchive";
+import { getPlayerProfileData } from "@/lib/actions";
 import { updatePlayer } from "@/lib/playersApi";
-import { fetchSessions } from "@/lib/sessionsApi";
 import {
   loadPlayerInjuryLog,
   type InjuryLogEntry,
@@ -23,79 +18,49 @@ import { useRequireAuth } from "@/lib/useRequireAuth";
 import SoftballFieldSvg from "@/components/test-day/SoftballFieldSvg";
 
 const formatPercent = (value: number): string => {
-  if (!Number.isFinite(value)) return "0.0%";
+  if (!Number.isFinite(value) || value < 0) return "0.0%";
   return `${(value * 100).toFixed(1)}%`;
 };
 
 const formatSeconds = (value: number): string => `${value.toFixed(2)}s`;
 
-const getParticipatedSessionCount = (
-  history: GameArchive[],
-  playerId: string
-): number =>
-  history.filter((game) => {
-    const hasHit = getSafeHits(game).some((hit) => hit.playerId === playerId);
-    const hasSpeed = getSafeSpeedRecords(game).some(
-      (row) => row.playerId === playerId
-    );
-    return hasHit || hasSpeed;
-  }).length;
+// 推导步骤：生涯挥击 / 击中(非 MISS) / 平飞；分母为 0 时比率按 0
+function getCareerSwingStats(hits: HitRecord[]) {
+  const swings = hits.length;
+  if (swings === 0) {
+    return { swings: 0, contactRate: 0, ldRate: 0 };
+  }
+  const contact = hits.filter((hit) => hit.result !== "MISS").length;
+  const ld = hits.filter((hit) => hit.result === "LD").length;
+  return {
+    swings,
+    contactRate: contact / swings,
+    ldRate: ld / swings,
+  };
+}
 
-const getBestLdRate = (
-  history: GameArchive[],
-  playerId: string
-): number | null => {
-  let best: number | null = null;
-
-  history.forEach((game) => {
-    const playerHits = getSafeHits(game).filter(
-      (hit) => hit.playerId === playerId
-    );
-    if (playerHits.length === 0) return;
-
-    const ldCount = playerHits.filter((hit) => hit.result === "LD").length;
-    const ldRate = ldCount / playerHits.length;
-    if (best === null || ldRate > best) best = ldRate;
-  });
-
-  return best;
-};
-
-// 上垒速度 PR：取该球员历史最短一垒 / 二垒耗时（忽略 null）
+// 上垒速度 PR：取历史最短一垒 / 二垒耗时（忽略 null）
 const getBestSpeedMarks = (
-  history: GameArchive[],
-  playerId: string
+  speedRecords: SpeedRecord[]
 ): { firstBase: number | null; secondBase: number | null } => {
   let firstBase: number | null = null;
   let secondBase: number | null = null;
 
-  history.forEach((game) => {
-    getSafeSpeedRecords(game)
-      .filter((row) => row.playerId === playerId)
-      .forEach((row: SpeedRecord) => {
-        if (row.firstBaseSeconds !== null) {
-          if (firstBase === null || row.firstBaseSeconds < firstBase) {
-            firstBase = row.firstBaseSeconds;
-          }
-        }
-        if (row.secondBaseSeconds !== null) {
-          if (secondBase === null || row.secondBaseSeconds < secondBase) {
-            secondBase = row.secondBaseSeconds;
-          }
-        }
-      });
+  speedRecords.forEach((row) => {
+    if (row.firstBaseSeconds !== null) {
+      if (firstBase === null || row.firstBaseSeconds < firstBase) {
+        firstBase = row.firstBaseSeconds;
+      }
+    }
+    if (row.secondBaseSeconds !== null) {
+      if (secondBase === null || row.secondBaseSeconds < secondBase) {
+        secondBase = row.secondBaseSeconds;
+      }
+    }
   });
 
   return { firstBase, secondBase };
 };
-
-const getCareerHits = (
-  history: GameArchive[],
-  playerId: string
-): HitRecord[] =>
-  history.flatMap((game) =>
-    getSafeHits(game).filter((hit) => hit.playerId === playerId)
-  );
 
 const getSprayDotClasses = (result: HitResult): string | null => {
   if (result === "MISS") return null;
@@ -114,7 +79,10 @@ export default function ProfilePage() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [history, setHistory] = useState<GameArchive[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [hits, setHits] = useState<HitRecord[]>([]);
+  const [speedRecords, setSpeedRecords] = useState<SpeedRecord[]>([]);
+  const [sessionCount, setSessionCount] = useState(0);
   const [injuryLog, setInjuryLog] = useState<InjuryLogEntry[]>([]);
   const [latestReadiness, setLatestReadiness] = useState<number | null>(null);
 
@@ -125,16 +93,41 @@ export default function ProfilePage() {
     setInjuryLog(loadPlayerInjuryLog(currentUser.playerId).slice(0, 5));
     const readiness = loadPlayerReadinessHistory(currentUser.playerId);
     setLatestReadiness(readiness[0]?.readinessScore ?? null);
+    setIsLoading(true);
+
     (async () => {
-      const sessions = await fetchSessions();
-      if (!cancelled) setHistory(sessions);
+      // Session 凭证字段为 playerId（非 id）
+      const res = await getPlayerProfileData(currentUser.playerId);
+      if (cancelled) return;
+      if (!res.success) {
+        console.error("云端被拒:", res.error);
+        setHits([]);
+        setSpeedRecords([]);
+        setSessionCount(0);
+      } else {
+        setHits(res.hits);
+        setSpeedRecords(res.speedRecords);
+        setSessionCount(res.sessionCount);
+      }
+      setIsLoading(false);
     })();
+
     return () => {
       cancelled = true;
     };
   }, [isMounted, currentUser?.playerId, currentUser?.playerName]);
 
   if (!isMounted || !currentUser) return null;
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
+        <p className="text-sm text-zinc-500">
+          正在从云端雷达拉取生涯数据...
+        </p>
+      </div>
+    );
+  }
 
   const handleStartEditName = () => {
     setEditNameValue(displayName || currentUser.playerName);
@@ -159,13 +152,8 @@ export default function ProfilePage() {
     setIsEditingName(false);
   };
 
-  const sessionCount = getParticipatedSessionCount(
-    history,
-    currentUser.playerId
-  );
-  const bestLdRate = getBestLdRate(history, currentUser.playerId);
-  const bestSpeed = getBestSpeedMarks(history, currentUser.playerId);
-  const careerHits = getCareerHits(history, currentUser.playerId);
+  const { swings, contactRate, ldRate } = getCareerSwingStats(hits);
+  const bestSpeed = getBestSpeedMarks(speedRecords);
 
   const speedPrLabel =
     bestSpeed.firstBase === null && bestSpeed.secondBase === null
@@ -202,7 +190,7 @@ export default function ProfilePage() {
               />
               <button
                 type="button"
-                onClick={handleSaveName}
+                onClick={() => void handleSaveName()}
                 className="shrink-0 px-2 py-1 text-xs text-zinc-500 transition-colors hover:text-zinc-900"
               >
                 💾 保存
@@ -246,10 +234,13 @@ export default function ProfilePage() {
           </span>
           <ul className="flex flex-col gap-1.5 text-sm">
             <li className="font-medium text-zinc-900">
-              T座打击：
-              {bestLdRate === null
-                ? "待录入"
-                : `最高平飞率 ${formatPercent(bestLdRate)}`}
+              生涯总挥击 (Swings)：{swings}
+            </li>
+            <li className="font-medium text-zinc-900">
+              击中率 (Contact%)：{formatPercent(contactRate)}
+            </li>
+            <li className="font-medium text-zinc-900">
+              平飞率 (LD%)：{formatPercent(ldRate)}
             </li>
             <li
               className={
@@ -274,14 +265,14 @@ export default function ProfilePage() {
           <div className="relative w-full max-w-2xl aspect-[1.4/1] overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
             <SoftballFieldSvg />
 
-            {careerHits.length === 0 ? (
+            {hits.length === 0 ? (
               <div className="absolute inset-0 flex items-center justify-center">
                 <p className="text-sm text-slate-400">
                   暂无生涯打点数据，请前往测试清单录入
                 </p>
               </div>
             ) : (
-              careerHits.map((hit) => {
+              hits.map((hit) => {
                 const dotClasses = getSprayDotClasses(hit.result);
                 if (!dotClasses || hit.x === undefined || hit.y === undefined) {
                   return null;

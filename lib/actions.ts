@@ -16,6 +16,11 @@ import {
   type PlayerRole,
 } from "@/lib/players";
 import type { Assignments } from "@/lib/sessionDraft";
+import type {
+  ProbeFeedback,
+  ReadinessHistoryEntry,
+} from "@/lib/readinessHistory";
+import type { PainArea } from "@/lib/clinical/painAreas";
 
 const DEFAULT_TEAM_NAME = "心理学部队";
 
@@ -284,3 +289,232 @@ export async function saveTestSession(
     return { success: false, error: errorMessage(error) };
   }
 }
+
+// 推导步骤：按 playerId 拉 Hit / SpeedRecord → 手写映射为前端契约（禁 spread）
+export async function getPlayerProfileData(
+  playerId: string
+): Promise<
+  ActionResult<{
+    hits: HitRecord[];
+    speedRecords: SpeedRecord[];
+    sessionCount: number;
+  }>
+> {
+  try {
+    if (typeof playerId !== "string" || !playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+
+    const player = await prisma.player.findUnique({
+      where: { id: playerId },
+      select: { id: true, name: true },
+    });
+    if (!player) {
+      return { success: false, error: "云端无此队员" };
+    }
+
+    const [hitRows, speedRows] = await Promise.all([
+      prisma.hit.findMany({
+        where: { playerId: player.id },
+        orderBy: { recordedAt: "asc" },
+      }),
+      prisma.speedRecord.findMany({
+        where: { playerId: player.id },
+        orderBy: { recordedAt: "asc" },
+      }),
+    ]);
+
+    const hits: HitRecord[] = hitRows.map((hit) => ({
+      id: hit.id,
+      x: hit.x ?? undefined,
+      y: hit.y ?? undefined,
+      result: hit.result,
+      playerId: hit.playerId,
+      playerName: player.name,
+      pitchType: hit.pitchType ?? undefined,
+      hitQuality: hit.hitQuality ?? undefined,
+      timestamp: hit.recordedAt.getTime(),
+    }));
+
+    const speedRecords: SpeedRecord[] = speedRows.map((row) => ({
+      id: row.id,
+      playerId: row.playerId,
+      playerName: player.name,
+      firstBaseSeconds: row.firstBaseSeconds,
+      secondBaseSeconds: row.secondBaseSeconds,
+      customSeconds: row.customSeconds,
+      timestamp: row.recordedAt.getTime(),
+    }));
+
+    const sessionCount = new Set([
+      ...hitRows.map((h) => h.sessionId),
+      ...speedRows.map((s) => s.sessionId),
+    ]).size;
+
+    return { success: true, hits, speedRecords, sessionCount };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+const PAIN_AREAS = new Set<string>([
+  "shoulder",
+  "elbow",
+  "lumbar",
+  "knee",
+  "ankle",
+  "wrist",
+]);
+const PROBE_FEEDBACKS = new Set<string>(["A", "B", "C"]);
+
+function asPainArea(value: unknown): PainArea | null {
+  return typeof value === "string" && PAIN_AREAS.has(value)
+    ? (value as PainArea)
+    : null;
+}
+
+function asProbeFeedback(value: unknown): ProbeFeedback | null {
+  return typeof value === "string" && PROBE_FEEDBACKS.has(value)
+    ? (value as ProbeFeedback)
+    : null;
+}
+
+function parseDateOnly(dateStr: string): Date {
+  // 正午 UTC，避免时区把 YYYY-MM-DD 推到前一天
+  return new Date(`${dateStr}T12:00:00.000Z`);
+}
+
+function formatDateOnly(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export type SaveReadinessPayload = {
+  playerId: string;
+  date: string;
+  readinessScore: number;
+  hasNewInjury: boolean;
+  injuryPart: PainArea | null;
+  injuryScore: number;
+  probeFeedback: ProbeFeedback | null;
+  /** 计算用输入；Schema ReadinessCheck 无对应列，不落库 */
+  sleepQuality?: string;
+  stressScore?: number;
+  fatigueScore?: number;
+  sorenessScore?: number;
+};
+
+// 推导步骤：校验 playerId/date/枚举 → upsert ReadinessCheck（手写字段，禁 spread）
+export async function saveReadinessAssessment(
+  payload: SaveReadinessPayload
+): Promise<ActionResult<Record<string, never>>> {
+  try {
+    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+    if (
+      typeof payload.date !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(payload.date)
+    ) {
+      return { success: false, error: "date 须为 YYYY-MM-DD" };
+    }
+    if (
+      typeof payload.readinessScore !== "number" ||
+      !Number.isFinite(payload.readinessScore)
+    ) {
+      return { success: false, error: "readinessScore 无效" };
+    }
+
+    const player = await prisma.player.findUnique({
+      where: { id: payload.playerId },
+      select: { id: true },
+    });
+    if (!player) {
+      return { success: false, error: "云端无此队员" };
+    }
+
+    const injuryPart = asPainArea(payload.injuryPart);
+    const probeFeedback = asProbeFeedback(payload.probeFeedback);
+    const injuryScore =
+      typeof payload.injuryScore === "number" &&
+      Number.isFinite(payload.injuryScore)
+        ? Math.round(payload.injuryScore)
+        : 0;
+
+    const date = parseDateOnly(payload.date);
+    const data = {
+      readinessScore: Math.round(payload.readinessScore),
+      hasNewInjury: Boolean(payload.hasNewInjury),
+      injuryPart,
+      injuryScore,
+      probeFeedback,
+    };
+
+    console.log(
+      "即将送入 Prisma 的数据:",
+      JSON.stringify({ playerId: player.id, date: payload.date, ...data }, null, 2)
+    );
+
+    await prisma.readinessCheck.upsert({
+      where: {
+        playerId_date: {
+          playerId: player.id,
+          date,
+        },
+      },
+      create: {
+        player: { connect: { id: player.id } },
+        date,
+        readinessScore: data.readinessScore,
+        hasNewInjury: data.hasNewInjury,
+        injuryPart: data.injuryPart,
+        injuryScore: data.injuryScore,
+        probeFeedback: data.probeFeedback,
+      },
+      update: {
+        readinessScore: data.readinessScore,
+        hasNewInjury: data.hasNewInjury,
+        injuryPart: data.injuryPart,
+        injuryScore: data.injuryScore,
+        probeFeedback: data.probeFeedback,
+      },
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+// 推导步骤：按 playerId 倒序拉 ReadinessCheck → 映射为前端 ReadinessHistoryEntry
+export async function getReadinessHistory(
+  playerId: string
+): Promise<ActionResult<{ history: ReadinessHistoryEntry[] }>> {
+  try {
+    if (typeof playerId !== "string" || !playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+
+    const rows = await prisma.readinessCheck.findMany({
+      where: { playerId },
+      orderBy: { date: "desc" },
+    });
+
+    const history: ReadinessHistoryEntry[] = rows.map((row) => ({
+      playerId: row.playerId,
+      date: formatDateOnly(row.date),
+      readinessScore: row.readinessScore,
+      hasNewInjury: row.hasNewInjury,
+      injuryPart: row.injuryPart,
+      injuryScore: row.injuryScore,
+      probeFeedback: row.probeFeedback,
+    }));
+
+    return { success: true, history };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
