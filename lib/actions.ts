@@ -24,10 +24,14 @@ import type { PainArea } from "@/lib/clinical/painAreas";
 
 const DEFAULT_TEAM_NAME = "心理学部队";
 
-/** Server Action 统一结果：禁止靠 throw 驱动前端分支（易静默失败） */
-export type ActionOk<T> = { success: true } & T;
+/** Server Action 统一结果：禁止靠 throw 驱动前端分支（易静默失败）
+ *  - 有业务载荷：ActionResult<{ players: ... }>
+ *  - 仅表示成功：ActionResult（默认 T=object，允许 { success: true }）
+ *  - 禁止 ActionResult<Record<string, never>>：与 success 字段交叉后恒为 never
+ */
+export type ActionOk<T extends object = object> = { success: true } & T;
 export type ActionErr = { success: false; error: string };
-export type ActionResult<T> = ActionOk<T> | ActionErr;
+export type ActionResult<T extends object = object> = ActionOk<T> | ActionErr;
 
 export type CloudPlayer = {
   id: string;
@@ -407,7 +411,7 @@ export type SaveReadinessPayload = {
 // 推导步骤：校验 playerId/date/枚举 → upsert ReadinessCheck（手写字段，禁 spread）
 export async function saveReadinessAssessment(
   payload: SaveReadinessPayload
-): Promise<ActionResult<Record<string, never>>> {
+): Promise<ActionResult> {
   try {
     if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
       return { success: false, error: "playerId 无效" };
