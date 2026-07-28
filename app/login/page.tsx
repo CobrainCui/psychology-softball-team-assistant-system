@@ -234,7 +234,7 @@ export default function LoginPage() {
                 <button
                   onClick={() => void handleSelectExisting()}
                   disabled={!selectedPlayer || isBusy}
-                  className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:opacity-30"
+                  className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
                 >
                   {isBusy ? "登录中…" : "以该身份进入"}
                 </button>
@@ -250,7 +250,7 @@ export default function LoginPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="请输入姓名"
-                className="border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
+                className="border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
               />
             </div>
 
@@ -297,7 +297,7 @@ export default function LoginPage() {
             <button
               onClick={() => void handleCreate()}
               disabled={!name.trim() || isBusy}
-              className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:opacity-30"
+              className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
             >
               {isBusy ? "注册中…" : "建立个人运动档案"}
             </button>

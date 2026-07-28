@@ -156,14 +156,14 @@ export default function TeeBallPanel({
         <button
           onClick={onConfirmHit}
           disabled={!isEntryPanelActive}
-          className="flex-1 bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:opacity-30"
+          className="flex-1 bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
         >
           ✅ 确认记录 | Confirm
         </button>
         <button
           onClick={onCancelHit}
           disabled={!pendingHit}
-          className="flex-1 bg-gray-200 py-2 text-sm text-zinc-700 transition-colors hover:bg-gray-300 disabled:opacity-30"
+          className="flex-1 bg-gray-200 py-2 text-sm text-zinc-700 transition-colors hover:bg-gray-300 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
         >
           ❌ 取消 | Cancel
         </button>
@@ -173,14 +173,14 @@ export default function TeeBallPanel({
         <button
           onClick={onUndo}
           disabled={batterHits.length === 0}
-          className="flex-1 border border-zinc-400 py-2 text-sm text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-30"
+          className="flex-1 border border-zinc-400 py-2 text-sm text-zinc-700 transition-colors hover:bg-zinc-100 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
         >
           撤销上一步
         </button>
         <button
           onClick={onClearAll}
           disabled={batterHits.length === 0}
-          className="flex-1 border border-red-300 py-2 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:opacity-30"
+          className="flex-1 border border-red-300 py-2 text-sm text-red-600 transition-colors hover:bg-red-50 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
         >
           清空全部
         </button>

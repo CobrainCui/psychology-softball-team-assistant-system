@@ -67,6 +67,12 @@ enum SleepQuality {
   bad
 }
 
+enum AvailabilityStatus {
+  full
+  modified
+  unavailable
+}
+
 /// 生理周期事件类型（球员主权数据）
 enum CycleEventType {
   period_start
@@ -154,6 +160,7 @@ model Player {
   sessionFeedbacks SessionFeedback[]
   cycleProfile    CycleProfile?
   cycleEvents     CycleEvent[]
+  availabilityChecks AvailabilityCheck[]
 
   @@index([teamId])
   @@index([name])
@@ -314,6 +321,27 @@ model SessionFeedback {
   note          String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, date])
+  @@index([playerId, date])
+}
+
+// ——— 上场可用性（仅运动损伤模块写入；与 Readiness 解耦） ———
+
+model AvailabilityCheck {
+  id            String             @id @default(cuid())
+  playerId      String
+  schemaVersion Int                @default(1)
+  date          DateTime           @db.Date
+  status        AvailabilityStatus
+  painArea      PainArea?
+  painScore     Int                @default(0)
+  symptom       String?
+  probeFeedback ProbeFeedback?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 

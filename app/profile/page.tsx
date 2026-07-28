@@ -65,12 +65,12 @@ const getBestSpeedMarks = (
 const getSprayDotClasses = (result: HitResult): string | null => {
   if (result === "MISS") return null;
   if (result === "LD") {
-    return "h-2 w-2 rounded-full bg-black opacity-80";
+    return "h-2 w-2 rounded-full bg-black";
   }
   if (result === "PU") {
-    return "h-2 w-2 rounded-full border border-red-500 bg-transparent opacity-70";
+    return "h-2 w-2 rounded-full border border-red-500 bg-white";
   }
-  return "h-1.5 w-1.5 rounded-full bg-gray-500 opacity-60";
+  return "h-1.5 w-1.5 rounded-full bg-zinc-500";
 };
 
 export default function ProfilePage() {
@@ -85,6 +85,9 @@ export default function ProfilePage() {
   const [sessionCount, setSessionCount] = useState(0);
   const [injuryLog, setInjuryLog] = useState<InjuryLogEntry[]>([]);
   const [latestReadiness, setLatestReadiness] = useState<number | null>(null);
+  const [availabilityLabelText, setAvailabilityLabelText] =
+    useState("完全可用");
+  const [availabilityPain, setAvailabilityPain] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
@@ -115,6 +118,8 @@ export default function ProfilePage() {
         if (res.latestReadiness !== null) {
           setLatestReadiness(res.latestReadiness);
         }
+        setAvailabilityLabelText(res.availabilityLabel);
+        setAvailabilityPain(res.availabilityPainLabel);
       }
       setIsLoading(false);
     })();
@@ -228,11 +233,18 @@ export default function ProfilePage() {
           <span className="font-mono text-2xl text-zinc-900">
             总参与测试数：{sessionCount} 次
           </span>
-          {latestReadiness !== null && (
-            <p className="mt-1 text-xs text-zinc-500">
-              最近 Readiness：{latestReadiness} / 100
+          <div className="mt-2 flex flex-col gap-0.5 text-xs text-zinc-500">
+            <p>
+              体能准备度：
+              {latestReadiness !== null
+                ? `${latestReadiness} / 100`
+                : "暂无打卡"}
             </p>
-          )}
+            <p>
+              上场可用性：{availabilityLabelText}
+              {availabilityPain ? ` · ${availabilityPain}` : ""}
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-col gap-2 border border-zinc-200 p-4">
@@ -303,7 +315,7 @@ export default function ProfilePage() {
           </span>
           {injuryLog.length === 0 ? (
             <p className="text-sm text-zinc-400">
-              暂无归档记录，请前往「伤病预防」生成并归档处方
+              暂无归档记录，请前往「运动损伤」生成并归档伤后建议
             </p>
           ) : (
             <ul className="flex flex-col gap-1.5 text-sm text-zinc-700">

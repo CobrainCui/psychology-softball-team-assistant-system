@@ -27,12 +27,12 @@ export default function RootLayout({
   return (
     <html
       lang="zh-CN"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased print:h-auto`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full bg-white antialiased print:h-auto`}
     >
       {/* 打印防呆：取消强制全屏高度与 flex 布局，避免打印时出现空白页或内容被裁切 */}
-      <body className="flex min-h-full flex-col print:block print:min-h-0">
+      <body className="flex min-h-full flex-col bg-white text-zinc-900 print:block print:min-h-0">
         <Navbar />
-        {children}
+        <div className="flex min-h-0 flex-1 flex-col bg-zinc-50">{children}</div>
         <SiteFooter />
       </body>
     </html>

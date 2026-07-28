@@ -20,7 +20,7 @@ export default function SoftballFieldSvg() {
       />
       <polygon
         points="70,95 89.1,75.9 70,56.8 50.9,75.9"
-        fill="none"
+        fill="#ffffff"
         stroke="#9ca3af"
         strokeWidth="1"
       />

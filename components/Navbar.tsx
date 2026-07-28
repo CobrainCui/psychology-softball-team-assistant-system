@@ -8,7 +8,7 @@ const PLAYER_NAV_LINKS = [
   { href: "/", label: "测试清单" },
   { href: "/assessment", label: "综合状态评估" },
   { href: "/feedback", label: "训后反馈" },
-  { href: "/prehab", label: "伤病预防" },
+  { href: "/prehab", label: "运动损伤" },
   { href: "/profile", label: "个人档案" },
 ];
 
@@ -16,7 +16,7 @@ const PLAYER_NAV_LINKS = [
 const COACH_NAV_LINKS = [
   { href: "/", label: "测试清单" },
   { href: "/assessment", label: "综合状态评估" },
-  { href: "/prehab", label: "伤病预防" },
+  { href: "/prehab", label: "运动损伤" },
   { href: "/coach", label: "教练摘要" },
   { href: "/profile", label: "个人档案" },
 ];

@@ -202,7 +202,7 @@ export default function SessionFeedbackPage() {
                 href={buildPrehabHref(painArea)}
                 className="text-xs text-zinc-600 underline underline-offset-2 hover:text-zinc-900"
               >
-                可选：生成该部位伤病预防处方
+                可选：前往「运动损伤」填写伤后建议
               </Link>
             </div>
           )}
@@ -228,7 +228,7 @@ export default function SessionFeedbackPage() {
           type="button"
           onClick={() => void handleSubmit()}
           disabled={status === "saving"}
-          className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:opacity-40"
+          className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
         >
           {status === "saving"
             ? "提交中…"

@@ -27,9 +27,17 @@ import {
   type PainArea,
 } from "@/lib/clinical/painAreas";
 import {
-  deriveReadinessTier,
-  type ReadinessTier,
-} from "@/lib/clinical/readinessTier";
+  deriveAvailabilityStatus,
+  availabilityLabel,
+  AVAILABILITY_LOOKBACK_DAYS,
+  type AvailabilityStatus,
+} from "@/lib/clinical/availabilityStatus";
+import {
+  loadBandFromScore,
+  loadBandTone,
+  type LoadBandId,
+} from "@/lib/clinical/readinessScore";
+import { type ReadinessTier } from "@/lib/clinical/readinessTier";
 import {
   type CycleConfidence,
   type CyclePhaseCode,
@@ -338,7 +346,7 @@ export async function saveTestSession(
   }
 }
 
-// 推导步骤：按 playerId 拉 Hit / SpeedRecord / InjuryLog / 最近 Readiness → 手写映射
+// 推导步骤：按 playerId 拉 Hit / SpeedRecord / InjuryLog / Readiness / Availability
 export async function getPlayerProfileData(
   playerId: string
 ): Promise<
@@ -348,6 +356,9 @@ export async function getPlayerProfileData(
     sessionCount: number;
     injuryLogs: InjuryLogEntry[];
     latestReadiness: number | null;
+    availabilityStatus: AvailabilityStatus;
+    availabilityLabel: string;
+    availabilityPainLabel: string | null;
   }>
 > {
   try {
@@ -363,7 +374,8 @@ export async function getPlayerProfileData(
       return { success: false, error: "云端无此队员" };
     }
 
-    const [hitRows, speedRows, injuryRows, latestCheck] = await Promise.all([
+    const [hitRows, speedRows, injuryRows, latestCheck, availToday] =
+      await Promise.all([
       prisma.hit.findMany({
         where: { playerId: player.id },
         orderBy: { recordedAt: "asc" },
@@ -382,7 +394,13 @@ export async function getPlayerProfileData(
         orderBy: { date: "desc" },
         select: { readinessScore: true },
       }),
+      prisma.availabilityCheck.findFirst({
+        where: { playerId: player.id },
+        orderBy: { date: "desc" },
+      }),
     ]);
+
+    const availStatus = (availToday?.status ?? "full") as AvailabilityStatus;
 
     const hits: HitRecord[] = hitRows.map((hit) => ({
       id: hit.id,
@@ -430,6 +448,11 @@ export async function getPlayerProfileData(
       sessionCount,
       injuryLogs,
       latestReadiness: latestCheck?.readinessScore ?? null,
+      availabilityStatus: availStatus,
+      availabilityLabel: availabilityLabel(availStatus),
+      availabilityPainLabel: availToday?.painArea
+        ? PAIN_AREA_LABEL[availToday.painArea]
+        : null,
     };
   } catch (error) {
     console.error("数据库写入失败的完整原因:", error);
@@ -577,6 +600,9 @@ export type SaveInjuryLogPayload = {
   painArea: PainArea;
   painScore: number;
   symptom: string;
+  probeFeedback?: ProbeFeedback | null;
+  cleared?: boolean;
+  date?: string;
 };
 
 // 推导步骤：校验 playerId/date/枚举 → upsert ReadinessCheck（含 Wellness 原值）
@@ -608,17 +634,10 @@ export async function saveReadinessAssessment(
       return { success: false, error: "云端无此队员" };
     }
 
-    const injuryPart = asPainArea(payload.injuryPart);
-    const probeFeedback = asProbeFeedback(payload.probeFeedback);
     const sleepQuality = asSleepQuality(payload.sleepQuality);
     const stressScore = clampScore0to10(payload.stressScore);
     const fatigueScore = clampScore0to10(payload.fatigueScore);
     const sorenessScore = clampScore0to10(payload.sorenessScore);
-    const injuryScore =
-      typeof payload.injuryScore === "number" &&
-      Number.isFinite(payload.injuryScore)
-        ? Math.round(payload.injuryScore)
-        : 0;
     const crampsScore = clampScore0to10(payload.crampsScore ?? undefined);
     const cycleEnergy = asCycleEnergy(payload.cycleEnergy);
     const cycleMood = asCycleMood(payload.cycleMood);
@@ -631,12 +650,13 @@ export async function saveReadinessAssessment(
         : null;
 
     const date = parseDateOnly(payload.date);
+    // 评估页已解耦伤病：写库时强制清空伤病字段，保留列仅兼容旧行
     const data = {
       readinessScore: Math.round(payload.readinessScore),
-      hasNewInjury: Boolean(payload.hasNewInjury),
-      injuryPart,
-      injuryScore,
-      probeFeedback,
+      hasNewInjury: false,
+      injuryPart: null as PainArea | null,
+      injuryScore: 0,
+      probeFeedback: null as ProbeFeedback | null,
       sleepQuality,
       stressScore,
       fatigueScore,
@@ -747,10 +767,12 @@ export async function getReadinessHistory(
   }
 }
 
-// 推导步骤：校验 playerId/部位/VAS/症状 → create InjuryLog → 返回前端契约条目
+// 推导步骤：校验 → create InjuryLog → upsert 当日 AvailabilityCheck
 export async function saveInjuryLog(
   payload: SaveInjuryLogPayload
-): Promise<ActionResult<{ entry: InjuryLogEntry }>> {
+): Promise<
+  ActionResult<{ entry: InjuryLogEntry; availability: AvailabilityStatus }>
+> {
   try {
     if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
       return { success: false, error: "playerId 无效" };
@@ -779,11 +801,31 @@ export async function saveInjuryLog(
 
     const painScore = Math.max(0, Math.min(10, Math.round(payload.painScore)));
     const symptom = payload.symptom.trim();
+    const probeFeedback = asProbeFeedback(payload.probeFeedback ?? null);
+    const cleared = Boolean(payload.cleared) || probeFeedback === "A";
+    const status = deriveAvailabilityStatus({
+      painScore,
+      probeFeedback,
+      cleared,
+    });
+    const dateStr =
+      typeof payload.date === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(payload.date)
+        ? payload.date
+        : getTodayDateStr();
+    const date = parseDateOnly(dateStr);
 
     console.log(
       "即将送入 Prisma 的数据:",
       JSON.stringify(
-        { playerId: player.id, painArea, painScore, symptom },
+        {
+          playerId: player.id,
+          painArea,
+          painScore,
+          symptom,
+          status,
+          probeFeedback,
+        },
         null,
         2
       )
@@ -799,6 +841,29 @@ export async function saveInjuryLog(
       },
     });
 
+    await prisma.availabilityCheck.upsert({
+      where: {
+        playerId_date: { playerId: player.id, date },
+      },
+      create: {
+        player: { connect: { id: player.id } },
+        date,
+        schemaVersion: 1,
+        status,
+        painArea: status === "full" ? null : painArea,
+        painScore: status === "full" ? 0 : painScore,
+        symptom: status === "full" ? null : symptom,
+        probeFeedback,
+      },
+      update: {
+        status,
+        painArea: status === "full" ? null : painArea,
+        painScore: status === "full" ? 0 : painScore,
+        symptom: status === "full" ? null : symptom,
+        probeFeedback,
+      },
+    });
+
     const entry: InjuryLogEntry = {
       schemaVersion: row.schemaVersion,
       id: row.id,
@@ -811,7 +876,7 @@ export async function saveInjuryLog(
       timestamp: row.createdAt.getTime(),
     };
 
-    return { success: true, entry };
+    return { success: true, entry, availability: status };
   } catch (error) {
     console.error("数据库写入失败的完整原因:", error);
     return { success: false, error: errorMessage(error) };
@@ -859,6 +924,90 @@ export async function getInjuryLogs(
   }
 }
 
+export type AvailabilitySnapshot = {
+  status: AvailabilityStatus;
+  statusLabel: string;
+  date: string | null;
+  painArea: PainArea | null;
+  painAreaLabel: string | null;
+  painScore: number;
+  probeFeedback: ProbeFeedback | null;
+  needsProbe: boolean;
+};
+
+// 推导步骤：当日 Availability → 否则近 LOOKBACK 天内非 full 最新一条 → 默认 full
+export async function getPlayerAvailability(
+  playerId: string,
+  dateStr?: string
+): Promise<ActionResult<{ availability: AvailabilitySnapshot }>> {
+  try {
+    if (typeof playerId !== "string" || !playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+    const date =
+      typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
+        ? dateStr
+        : getTodayDateStr();
+
+    const today = await prisma.availabilityCheck.findUnique({
+      where: {
+        playerId_date: {
+          playerId,
+          date: parseDateOnly(date),
+        },
+      },
+    });
+
+    let row = today;
+    if (!row) {
+      const cutoff = new Date(parseDateOnly(date));
+      cutoff.setUTCDate(cutoff.getUTCDate() - AVAILABILITY_LOOKBACK_DAYS);
+      row = await prisma.availabilityCheck.findFirst({
+        where: {
+          playerId,
+          date: { gte: cutoff, lte: parseDateOnly(date) },
+          status: { not: "full" },
+        },
+        orderBy: { date: "desc" },
+      });
+    }
+
+    if (!row) {
+      return {
+        success: true,
+        availability: {
+          status: "full",
+          statusLabel: availabilityLabel("full"),
+          date: null,
+          painArea: null,
+          painAreaLabel: null,
+          painScore: 0,
+          probeFeedback: null,
+          needsProbe: false,
+        },
+      };
+    }
+
+    const status = row.status as AvailabilityStatus;
+    return {
+      success: true,
+      availability: {
+        status,
+        statusLabel: availabilityLabel(status),
+        date: formatDateOnly(row.date),
+        painArea: row.painArea,
+        painAreaLabel: row.painArea ? PAIN_AREA_LABEL[row.painArea] : null,
+        painScore: row.painScore,
+        probeFeedback: row.probeFeedback,
+        needsProbe: status !== "full" && row.probeFeedback !== "A",
+      },
+    };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
 export type CoachFlagRow = {
   playerId: string;
   playerName: string;
@@ -869,6 +1018,18 @@ export type CoachFlagRow = {
   /** 脱敏生理负荷；无授权或无标签时为 null */
   physiologicalLoadLabel: string | null;
   physiologicalLoadHint: string | null;
+};
+
+export type CoachDualTrackRow = {
+  playerId: string;
+  playerName: string;
+  readinessScore: number | null;
+  loadBandId: LoadBandId | null;
+  loadBandLabel: string | null;
+  readinessTone: "red" | "yellow" | "green" | null;
+  availabilityStatus: AvailabilityStatus;
+  availabilityLabel: string;
+  painAreaLabel: string | null;
 };
 
 export type CoachSessionFeedbackRow = {
@@ -885,9 +1046,13 @@ export type CoachSessionFeedbackRow = {
 
 export type CoachDaySummary = {
   date: string;
+  /** 双轨全员摘要（队员） */
+  roster: CoachDualTrackRow[];
+  unavailable: CoachDualTrackRow[];
+  modified: CoachDualTrackRow[];
+  energyReduced: CoachDualTrackRow[];
   red: CoachFlagRow[];
   yellow: CoachFlagRow[];
-  /** 已授权且当日有脱敏负荷标签的绿档球员 */
   loadNotes: CoachFlagRow[];
   sessionFeedbacks: CoachSessionFeedbackRow[];
   checkedInCount: number;
@@ -1042,44 +1207,88 @@ export async function getCoachDaySummary(
     const nameById = new Map(roster.map((p) => [p.id, p.name]));
     const day = parseDateOnly(date);
 
-    const [checks, feedbackRows, profiles] = await Promise.all([
-      prisma.readinessCheck.findMany({
-        where: { playerId: { in: rosterIds }, date: day },
-      }),
-      prisma.sessionFeedback.findMany({
-        where: { playerId: { in: playerIds }, date: day },
-        orderBy: [{ hasPain: "desc" }, { sessionRpe: "desc" }],
-      }),
-      prisma.cycleProfile.findMany({
-        where: { playerId: { in: rosterIds } },
-        select: {
-          playerId: true,
-          sharingLevel: true,
-          trackingEnabled: true,
-        },
-      }),
-    ]);
+    const [checks, feedbackRows, profiles, availabilityRows] =
+      await Promise.all([
+        prisma.readinessCheck.findMany({
+          where: { playerId: { in: rosterIds }, date: day },
+        }),
+        prisma.sessionFeedback.findMany({
+          where: { playerId: { in: playerIds }, date: day },
+          orderBy: [{ hasPain: "desc" }, { sessionRpe: "desc" }],
+        }),
+        prisma.cycleProfile.findMany({
+          where: { playerId: { in: rosterIds } },
+          select: {
+            playerId: true,
+            sharingLevel: true,
+            trackingEnabled: true,
+          },
+        }),
+        prisma.availabilityCheck.findMany({
+          where: { playerId: { in: playerIds }, date: day },
+        }),
+      ]);
+
+    // 近 7 天未解除可用性（当日无记录时回退）
+    const cutoff = new Date(day);
+    cutoff.setUTCDate(cutoff.getUTCDate() - AVAILABILITY_LOOKBACK_DAYS);
+    const recentAvailability = await prisma.availabilityCheck.findMany({
+      where: {
+        playerId: { in: playerIds },
+        date: { gte: cutoff, lte: day },
+        status: { not: "full" },
+      },
+      orderBy: { date: "desc" },
+    });
 
     const profileByPlayer = new Map(
       profiles.map((p) => [p.playerId, p] as const)
     );
     const checkByPlayer = new Map(checks.map((row) => [row.playerId, row]));
+    const availToday = new Map(
+      availabilityRows.map((row) => [row.playerId, row] as const)
+    );
+    const availFallback = new Map<string, (typeof recentAvailability)[0]>();
+    for (const row of recentAvailability) {
+      if (!availFallback.has(row.playerId)) {
+        availFallback.set(row.playerId, row);
+      }
+    }
+
     const red: CoachFlagRow[] = [];
     const yellow: CoachFlagRow[] = [];
     const loadNotes: CoachFlagRow[] = [];
+    const dualRoster: CoachDualTrackRow[] = [];
 
     for (const player of roster) {
-      const row = checkByPlayer.get(player.id);
-      if (!row) continue;
+      if (player.role === "coach") continue;
 
-      const derived = deriveReadinessTier({
-        readinessScore: row.readinessScore,
-        hasNewInjury: row.hasNewInjury,
-        injuryPart: row.injuryPart,
-        injuryScore: row.injuryScore,
-        probeFeedback: row.probeFeedback,
+      const row = checkByPlayer.get(player.id);
+      const availRow = availToday.get(player.id) ?? availFallback.get(player.id);
+      const availabilityStatus = (availRow?.status ??
+        "full") as AvailabilityStatus;
+      const loadBand = row
+        ? loadBandFromScore(row.readinessScore)
+        : null;
+
+      dualRoster.push({
+        playerId: player.id,
+        playerName: player.name,
+        readinessScore: row?.readinessScore ?? null,
+        loadBandId: loadBand?.id ?? null,
+        loadBandLabel: loadBand?.label ?? null,
+        readinessTone: loadBand ? loadBandTone(loadBand.id) : null,
+        availabilityStatus,
+        availabilityLabel: availabilityLabel(availabilityStatus),
+        painAreaLabel: availRow?.painArea
+          ? PAIN_AREA_LABEL[availRow.painArea]
+          : null,
       });
 
+      if (!row) continue;
+
+      // 体能侧列表：仅用负荷带，不用伤病熔断
+      const tone = loadBandTone(loadBandFromScore(row.readinessScore).id);
       const profile = profileByPlayer.get(player.id);
       const canShareLoad =
         profile?.trackingEnabled === true &&
@@ -1089,18 +1298,18 @@ export async function getCoachDaySummary(
       const physiologicalLoadLabel = tag ? LOAD_TAG_LABEL[tag] : null;
       const physiologicalLoadHint = tag ? LOAD_TAG_COACH_HINT[tag] : null;
 
-      if (derived.tier === "red" || derived.tier === "yellow") {
+      if (tone === "red" || tone === "yellow") {
         const flag: CoachFlagRow = {
           playerId: player.id,
           playerName: player.name,
-          tier: derived.tier,
+          tier: tone,
           readinessScore: row.readinessScore,
-          reason: derived.reason,
-          injuryPartLabel: derived.injuryPartLabel,
+          reason: loadBandFromScore(row.readinessScore).label,
+          injuryPartLabel: null,
           physiologicalLoadLabel,
           physiologicalLoadHint,
         };
-        if (derived.tier === "red") red.push(flag);
+        if (tone === "red") red.push(flag);
         else yellow.push(flag);
       } else if (physiologicalLoadLabel && physiologicalLoadHint) {
         loadNotes.push({
@@ -1116,6 +1325,18 @@ export async function getCoachDaySummary(
       }
     }
 
+    const unavailable = dualRoster.filter(
+      (r) => r.availabilityStatus === "unavailable"
+    );
+    const modified = dualRoster.filter(
+      (r) => r.availabilityStatus === "modified"
+    );
+    const energyReduced = dualRoster.filter(
+      (r) =>
+        r.availabilityStatus !== "unavailable" &&
+        (r.readinessTone === "yellow" || r.readinessTone === "red")
+    );
+
     const sessionFeedbacks: CoachSessionFeedbackRow[] = feedbackRows.map(
       (row) => ({
         playerId: row.playerId,
@@ -1130,12 +1351,16 @@ export async function getCoachDaySummary(
     );
 
     const checkedInCount = checks.length;
-    const rosterCount = roster.length;
+    const rosterCount = playerIds.length;
 
     return {
       success: true,
       summary: {
         date,
+        roster: dualRoster,
+        unavailable,
+        modified,
+        energyReduced,
         red,
         yellow,
         loadNotes,

@@ -6,11 +6,68 @@ import MedicalDisclaimer from "@/components/MedicalDisclaimer";
 import {
   getCoachDaySummary,
   type CoachDaySummary,
+  type CoachDualTrackRow,
   type CoachFlagRow,
   type CoachSessionFeedbackRow,
 } from "@/lib/actions";
 import { getTodayDateStr } from "@/lib/readinessHistory";
 import { useRequireAuth } from "@/lib/useRequireAuth";
+
+function DualList({
+  title,
+  emptyText,
+  rows,
+  tone,
+}: {
+  title: string;
+  emptyText: string;
+  rows: CoachDualTrackRow[];
+  tone: "red" | "yellow" | "neutral";
+}) {
+  const border =
+    tone === "red"
+      ? "border-red-600"
+      : tone === "yellow"
+        ? "border-amber-500"
+        : "border-zinc-300";
+
+  return (
+    <div className={`flex flex-col gap-2 border ${border} p-4`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-xs font-semibold uppercase text-zinc-700">
+          {title}
+        </h2>
+        <span className="font-mono text-xs text-zinc-500">{rows.length}</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-sm text-zinc-400">{emptyText}</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {rows.map((row) => (
+            <li
+              key={row.playerId}
+              className="border border-zinc-200 bg-white px-3 py-2 text-sm"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-medium">{row.playerName}</span>
+                <span className="font-mono text-xs text-zinc-500">
+                  {row.readinessScore != null
+                    ? `${row.readinessScore}`
+                    : "—"}
+                  {row.loadBandLabel ? ` · ${row.loadBandLabel}` : ""}
+                </span>
+              </div>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                可用性 {row.availabilityLabel}
+                {row.painAreaLabel ? ` · ${row.painAreaLabel}` : ""}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function FlagList({
   title,
@@ -43,7 +100,7 @@ function FlagList({
           {rows.map((row) => (
             <li
               key={row.playerId}
-              className="border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900"
+              className="border border-zinc-200 bg-white px-3 py-2 text-sm"
             >
               <div className="flex items-baseline justify-between gap-2">
                 <span className="font-medium">{row.playerName}</span>
@@ -51,12 +108,9 @@ function FlagList({
                   {row.readinessScore}/100
                 </span>
               </div>
-              <p className="mt-0.5 text-xs text-zinc-500">
-                {row.reason}
-                {row.injuryPartLabel ? ` · ${row.injuryPartLabel}` : ""}
-              </p>
+              <p className="mt-0.5 text-xs text-zinc-500">{row.reason}</p>
               {row.physiologicalLoadLabel && (
-                <p className="mt-1 text-xs leading-relaxed text-zinc-600">
+                <p className="mt-1 text-xs text-zinc-600">
                   生理负荷：{row.physiologicalLoadLabel}
                   {row.physiologicalLoadHint
                     ? ` · ${row.physiologicalLoadHint}`
@@ -81,9 +135,6 @@ function SessionFeedbackList({ rows }: { rows: CoachSessionFeedbackRow[] }) {
         </h2>
         <span className="font-mono text-xs text-zinc-500">{list.length}</span>
       </div>
-      <p className="text-xs text-zinc-400">
-        不当众宣读笔记。有不适者已置顶排序。
-      </p>
       {list.length === 0 ? (
         <p className="text-sm text-zinc-400">当日尚无队员训后反馈</p>
       ) : (
@@ -91,7 +142,7 @@ function SessionFeedbackList({ rows }: { rows: CoachSessionFeedbackRow[] }) {
           {list.map((row) => (
             <li
               key={row.playerId}
-              className={`border px-3 py-2 text-sm text-zinc-900 ${
+              className={`border px-3 py-2 text-sm ${
                 row.hasPain
                   ? "border-amber-400 bg-amber-50"
                   : "border-zinc-200 bg-white"
@@ -111,9 +162,7 @@ function SessionFeedbackList({ rows }: { rows: CoachSessionFeedbackRow[] }) {
                 </p>
               )}
               {row.note && (
-                <p className="mt-1 text-xs leading-relaxed text-zinc-600">
-                  「{row.note}」
-                </p>
+                <p className="mt-1 text-xs text-zinc-600">「{row.note}」</p>
               )}
             </li>
           ))}
@@ -171,7 +220,7 @@ export default function CoachSummaryPage() {
             教练日摘要
           </h1>
           <p className="mt-1 text-xs text-zinc-400">
-            红/黄名单 + 脱敏生理负荷 + 队员训后反馈 · 辅助排训，不替代医疗
+            体能准备度 + 上场可用性双轨 · 训后反馈在下方
           </p>
         </div>
 
@@ -184,7 +233,7 @@ export default function CoachSummaryPage() {
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
-              className="border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
+              className="border border-zinc-300 px-3 py-2 text-sm"
             />
           </div>
           {summary && (
@@ -201,7 +250,6 @@ export default function CoachSummaryPage() {
         {isLoading && (
           <p className="text-center text-sm text-zinc-400">加载中…</p>
         )}
-
         {error && (
           <p className="border border-red-300 bg-red-50 p-3 text-sm text-red-700">
             {error}
@@ -210,15 +258,33 @@ export default function CoachSummaryPage() {
 
         {!isLoading && !error && summary && (
           <>
+            <DualList
+              title="伤缺 · Unavailable"
+              emptyText="当日无伤缺"
+              rows={summary.unavailable ?? []}
+              tone="red"
+            />
+            <DualList
+              title="限制性可用 · Modified"
+              emptyText="当日无限制性可用"
+              rows={summary.modified ?? []}
+              tone="yellow"
+            />
+            <DualList
+              title="体能需减量"
+              emptyText="当日无体能减量"
+              rows={summary.energyReduced ?? []}
+              tone="yellow"
+            />
             <FlagList
-              title="红牌 · 建议停训就医"
-              emptyText="当日无红牌"
+              title="体能红牌（恢复课）"
+              emptyText="无"
               rows={summary.red}
               tone="red"
             />
             <FlagList
-              title="黄牌 · 建议减量观察"
-              emptyText="当日无黄牌"
+              title="体能黄牌"
+              emptyText="无"
               rows={summary.yellow}
               tone="yellow"
             />
@@ -230,7 +296,7 @@ export default function CoachSummaryPage() {
                 tone="yellow"
               />
             )}
-            <SessionFeedbackList rows={summary.sessionFeedbacks ?? []} />
+            <SessionFeedbackList rows={summary.sessionFeedbacks} />
           </>
         )}
       </main>

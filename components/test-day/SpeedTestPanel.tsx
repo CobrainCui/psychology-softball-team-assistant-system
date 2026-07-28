@@ -65,7 +65,7 @@ export default function SpeedTestPanel({
               onChange={(e) =>
                 onSpeedInputChange(player.id, "firstBase", e.target.value)
               }
-              className="w-24 border border-zinc-300 px-2 py-1 text-sm text-zinc-900 disabled:opacity-40"
+              className="w-24 border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 disabled:bg-zinc-200 disabled:text-zinc-500 disabled:hover:bg-zinc-200"
             />
             <input
               type="number"
@@ -77,7 +77,7 @@ export default function SpeedTestPanel({
               onChange={(e) =>
                 onSpeedInputChange(player.id, "secondBase", e.target.value)
               }
-              className="w-24 border border-zinc-300 px-2 py-1 text-sm text-zinc-900 disabled:opacity-40"
+              className="w-24 border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 disabled:bg-zinc-200 disabled:text-zinc-500 disabled:hover:bg-zinc-200"
             />
             <input
               type="number"
@@ -89,7 +89,7 @@ export default function SpeedTestPanel({
               onChange={(e) =>
                 onSpeedInputChange(player.id, "custom", e.target.value)
               }
-              className="w-24 border border-zinc-300 px-2 py-1 text-sm text-zinc-900 disabled:opacity-40"
+              className="w-24 border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 disabled:bg-zinc-200 disabled:text-zinc-500 disabled:hover:bg-zinc-200"
             />
             <button
               type="button"
