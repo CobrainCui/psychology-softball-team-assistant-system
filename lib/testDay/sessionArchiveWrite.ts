@@ -66,6 +66,42 @@ export function buildTestSessionCreateInput(
     };
   });
 
+  const speedColumnCreates = data.speedColumns.map((column, index) => {
+    if (typeof column.id !== "string" || !column.id) {
+      throw new Error(`第 ${index + 1} 列跑垒缺少 id`);
+    }
+    if (typeof column.name !== "string" || !column.name.trim()) {
+      throw new Error(`第 ${index + 1} 列跑垒缺少名称`);
+    }
+    return {
+      id: column.id,
+      name: column.name.trim(),
+      sortOrder:
+        typeof column.sortOrder === "number" ? column.sortOrder : index,
+      recordedAt: archivedAt,
+    };
+  });
+
+  const speedMarkCreates = data.speedMarks.map((mark, index) => {
+    const seconds = toFloatOrNull(mark.seconds);
+    if (
+      typeof mark.playerId !== "string" ||
+      !mark.playerId ||
+      typeof mark.columnId !== "string" ||
+      !mark.columnId ||
+      seconds === null ||
+      seconds < 0
+    ) {
+      throw new Error(`第 ${index + 1} 条跑垒秒数无效`);
+    }
+    return {
+      columnId: mark.columnId,
+      playerId: mark.playerId,
+      seconds,
+      recordedAt: archivedAt,
+    };
+  });
+
   const flyCatchCreates = data.flyCatchAttempts.map((row, index) => {
     if (typeof row.playerId !== "string" || !row.playerId) {
       throw new Error(`第 ${index + 1} 条接高飞缺少 playerId`);
@@ -148,9 +184,16 @@ export function buildTestSessionCreateInput(
     archivedAt,
     assignments: payload.assignments ?? undefined,
     testItems: payload.testItems ?? undefined,
+    assignmentLog: payload.assignmentLog ?? undefined,
     hits: hitCreates.length > 0 ? { create: hitCreates } : undefined,
     speedRecords:
       speedCreates.length > 0 ? { create: speedCreates } : undefined,
+    speedColumns:
+      speedMarkCreates.length > 0 && speedColumnCreates.length > 0
+        ? { create: speedColumnCreates }
+        : undefined,
+    speedMarks:
+      speedMarkCreates.length > 0 ? { create: speedMarkCreates } : undefined,
     flyCatchAttempts:
       flyCatchCreates.length > 0 ? { create: flyCatchCreates } : undefined,
     strikeJudgeColumns:

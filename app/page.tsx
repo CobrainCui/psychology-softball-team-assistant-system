@@ -9,13 +9,16 @@ import TeeBallPanel from "@/components/test-day/TeeBallPanel";
 import ThrowMatrixPanel from "@/components/test-day/ThrowMatrixPanel";
 import { useTestDaySession } from "@/hooks/useTestDaySession";
 import { getPlayers, saveTestSession } from "@/lib/actions";
-import type { HitRecord, HitResult, SpeedRecord } from "@/lib/gameArchive";
+import type { HitRecord, HitResult } from "@/lib/gameArchive";
 import {
   accordionTestItems,
+  isDefaultTestItem,
   saveSessionDraft,
   SESSION_DRAFT_SCHEMA_VERSION,
 } from "@/lib/sessionDraft";
 import { sessionArchiveHasContent } from "@/lib/testDay/archiveValidation";
+import { speedRecordsFromGrid } from "@/lib/testDay/speedGrid";
+import { RecordActions } from "@/components/records/RecordActions";
 
 /** 与 Prisma HitResult / 大联盟弹道字典对齐；拒绝旧 1B/2B/3B/HR/OUT */
 const ALLOWED_HIT_RESULTS: ReadonlySet<HitResult> = new Set([
@@ -26,33 +29,14 @@ const ALLOWED_HIT_RESULTS: ReadonlySet<HitResult> = new Set([
   "MISS",
 ]);
 
-function hasMeasuredSpeed(row: SpeedRecord): boolean {
-  return (
-    (typeof row.firstBaseSeconds === "number" &&
-      Number.isFinite(row.firstBaseSeconds)) ||
-    (typeof row.secondBaseSeconds === "number" &&
-      Number.isFinite(row.secondBaseSeconds)) ||
-    (typeof row.customSeconds === "number" &&
-      Number.isFinite(row.customSeconds))
-  );
-}
-
-// 推导步骤：去掉空测速；打点只保留弹道白名单 result + 云端 playerId
-function sanitizeArchivePayload(hits: HitRecord[], speedRecords: SpeedRecord[]) {
-  const cleanHits = hits.filter(
+function sanitizeHits(hits: HitRecord[]) {
+  return hits.filter(
     (hit) =>
       typeof hit.playerId === "string" &&
       hit.playerId.length > 0 &&
       typeof hit.result === "string" &&
       ALLOWED_HIT_RESULTS.has(hit.result as HitResult)
   );
-  const cleanSpeed = speedRecords.filter(
-    (row) =>
-      typeof row.playerId === "string" &&
-      row.playerId.length > 0 &&
-      hasMeasuredSpeed(row)
-  );
-  return { hits: cleanHits, speedRecords: cleanSpeed };
 }
 
 export default function Home() {
@@ -88,19 +72,25 @@ export default function Home() {
   }, []);
 
   const handleArchiveGame = async () => {
-    const cleaned = sanitizeArchivePayload(
-      session.hits,
-      session.speedRecords
+    const speedMarks = session.speedMarks.filter(
+      (mark) =>
+        typeof mark.playerId === "string" &&
+        mark.playerId.length > 0 &&
+        Number.isFinite(mark.seconds) &&
+        mark.seconds >= 0
     );
     const payload = {
-      hits: cleaned.hits,
-      speedRecords: cleaned.speedRecords,
+      hits: sanitizeHits(session.hits),
+      speedRecords: speedRecordsFromGrid(speedMarks),
+      speedColumns: session.speedColumns,
+      speedMarks,
       flyCatchAttempts: session.flyCatchAttempts,
       strikeJudgeColumns: session.strikeJudgeColumns,
       strikeJudgeCells: session.strikeJudgeCells,
       throwPlays: session.throwPlays,
       assignments: session.assignments,
       testItems: session.testItems,
+      assignmentLog: session.assignmentLog,
     };
 
     if (!sessionArchiveHasContent(payload)) {
@@ -132,9 +122,14 @@ export default function Home() {
       saveSessionDraft({
         schemaVersion: SESSION_DRAFT_SCHEMA_VERSION,
         hits: session.hits,
-        speedRecords: session.speedRecords,
+        speedRecords: speedRecordsFromGrid(session.speedMarks),
+        speedColumns: session.speedColumns,
+        speedMarks: session.speedMarks,
         assignments: session.assignments,
         testItems: session.testItems,
+        assignmentLocked: session.assignmentLocked,
+        assignmentLog: session.assignmentLog,
+        committedAssignments: session.committedAssignments,
         flyCatchAttempts: session.flyCatchAttempts,
         strikeJudgeColumns: session.strikeJudgeColumns,
         strikeJudgeCells: session.strikeJudgeCells,
@@ -158,12 +153,16 @@ export default function Home() {
           players={session.players}
           testItems={session.testItems}
           assignments={session.assignments}
+          assignmentLocked={session.assignmentLocked}
+          assignmentLog={session.assignmentLog}
           sidebarMode={session.sidebarMode}
           onSidebarModeChange={session.setSidebarMode}
           onAddPlayer={session.handleAddPlayer}
           onToggleAssignment={session.handleToggleAssignment}
           onSelectAllTestsForPlayer={session.handleSelectAllTestsForPlayer}
           onSelectAllPlayersForTest={session.handleSelectAllPlayersForTest}
+          onSaveAssignments={session.handleSaveAssignments}
+          onBeginEditAssignments={session.handleBeginEditAssignments}
         />
 
         <main className="flex w-full flex-1 flex-col gap-4">
@@ -208,14 +207,18 @@ export default function Home() {
                         onCancelHit={session.handleCancelHit}
                         onUndo={session.handleUndo}
                         onClearAll={session.handleClearAll}
+                        editingHitId={session.editingHitId}
+                        onBeginEditHit={session.handleBeginEditHit}
+                        onDeleteHit={session.handleDeleteHit}
                       />
                     ) : tab === "上垒速度" ? (
                       <SpeedTestPanel
                         assignedPlayers={session.speedTestAssignedPlayers}
-                        speedRecords={session.speedRecords}
-                        speedInputs={session.speedInputs}
-                        onSpeedInputChange={session.handleSpeedInputChange}
-                        onRecordSpeed={session.handleRecordSpeed}
+                        columns={session.speedColumns}
+                        marks={session.speedMarks}
+                        onMarkChange={session.handleSpeedMarkChange}
+                        onAddColumn={session.handleAddSpeedColumn}
+                        onRemoveColumn={session.handleRemoveSpeedColumn}
                       />
                     ) : tab === "接高飞" ? (
                       <FlyCatchPanel
@@ -224,6 +227,9 @@ export default function Home() {
                         noteDrafts={session.flyCatchNoteDrafts}
                         onNoteDraftChange={session.handleFlyCatchNoteDraftChange}
                         onRecordAttempt={session.handleRecordFlyCatch}
+                        editingAttemptId={session.editingFlyCatchId}
+                        onBeginEdit={session.handleBeginEditFlyCatch}
+                        onDeleteAttempt={session.handleDeleteFlyCatch}
                         onUndoLast={session.handleUndoFlyCatch}
                       />
                     ) : tab === "好球判断" ? (
@@ -237,6 +243,7 @@ export default function Home() {
                         onReorderColumns={session.handleReorderStrikeJudgeColumns}
                         onUpsertCell={session.handleUpsertStrikeJudgeCell}
                         onClearCell={session.handleClearStrikeJudgeCell}
+                        onRemoveColumn={session.handleRemoveStrikeJudgeColumn}
                       />
                     ) : tab === "6-3传球" ? (
                       <ThrowMatrixPanel
@@ -300,6 +307,24 @@ export default function Home() {
                     >
                       确认并生成测试项
                     </button>
+                    <ul className="flex flex-col gap-1">
+                      {session.testItems
+                        .filter((item) => !isDefaultTestItem(item))
+                        .map((item) => (
+                          <li
+                            key={item}
+                            className="flex items-center justify-between gap-2 text-sm text-zinc-700"
+                          >
+                            <span>{item}</span>
+                            <RecordActions
+                              onDelete={() =>
+                                session.handleRemoveCustomTest(item)
+                              }
+                              deleteConfirm={`确认删除自定义测试「${item}」？对应排阵也会取消。`}
+                            />
+                          </li>
+                        ))}
+                    </ul>
                   </div>
                 </div>
               )}

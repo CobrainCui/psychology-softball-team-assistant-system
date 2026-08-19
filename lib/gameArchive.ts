@@ -1,6 +1,6 @@
 // 综合测试日数据契约：写入端 (测试清单) 与读取端 (个人档案) 共用唯一类型与迁移。
 
-export const GAME_ARCHIVE_SCHEMA_VERSION = 2;
+export const GAME_ARCHIVE_SCHEMA_VERSION = 3;
 
 export type HitResult = "LD" | "FB" | "GB" | "PU" | "MISS";
 export type PitchType = "FB" | "CB" | "SL" | "CH" | "OT";
@@ -24,7 +24,26 @@ export interface HitRecord {
   timestamp: number;
 }
 
-// 上垒速度：三项耗时均可选填，null 表示该维度未测
+export const SPEED_FIRST_BASE_COLUMN_ID = "firstBase";
+export const SPEED_SECOND_BASE_COLUMN_ID = "secondBase";
+export const SPEED_LEGACY_CUSTOM_COLUMN_ID = "legacyCustom";
+
+export interface SpeedColumn {
+  id: string;
+  name: string;
+  sortOrder: number;
+}
+
+export interface SpeedMark {
+  id: string;
+  playerId: string;
+  playerName: string;
+  columnId: string;
+  seconds: number;
+  timestamp: number;
+}
+
+// 上垒速度：三项耗时均可选填，null 表示该维度未测（档案 PR 仍读此结构）
 export interface SpeedRecord {
   id: string;
   playerId: string;
@@ -84,6 +103,8 @@ export interface GameArchive {
   date: string;
   hits: HitRecord[];
   speedRecords: SpeedRecord[];
+  speedColumns: SpeedColumn[];
+  speedMarks: SpeedMark[];
   flyCatchAttempts: FlyCatchAttempt[];
   strikeJudgeColumns: StrikeJudgeColumn[];
   strikeJudgeCells: StrikeJudgeCell[];
@@ -93,6 +114,8 @@ export interface GameArchive {
 }
 
 export type SkillArchiveSlice = {
+  speedColumns?: SpeedColumn[];
+  speedMarks?: SpeedMark[];
   flyCatchAttempts: FlyCatchAttempt[];
   strikeJudgeColumns: StrikeJudgeColumn[];
   strikeJudgeCells: StrikeJudgeCell[];
@@ -111,6 +134,18 @@ export function getSafeSpeedRecords(game: {
   speedRecords?: SpeedRecord[];
 }): SpeedRecord[] {
   return game.speedRecords ?? [];
+}
+
+export function getSafeSpeedColumns(game: {
+  speedColumns?: SpeedColumn[];
+}): SpeedColumn[] {
+  return game.speedColumns ?? [];
+}
+
+export function getSafeSpeedMarks(game: {
+  speedMarks?: SpeedMark[];
+}): SpeedMark[] {
+  return game.speedMarks ?? [];
 }
 
 export function getSafeFlyCatchAttempts(game: {
@@ -156,6 +191,31 @@ export function isSpeedRecord(value: unknown): value is SpeedRecord {
     typeof row.id === "string" &&
     typeof row.playerId === "string" &&
     typeof row.playerName === "string" &&
+    typeof row.timestamp === "number"
+  );
+}
+
+export function isSpeedColumn(value: unknown): value is SpeedColumn {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === "string" &&
+    typeof row.name === "string" &&
+    typeof row.sortOrder === "number"
+  );
+}
+
+export function isSpeedMark(value: unknown): value is SpeedMark {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === "string" &&
+    typeof row.playerId === "string" &&
+    typeof row.playerName === "string" &&
+    typeof row.columnId === "string" &&
+    typeof row.seconds === "number" &&
+    Number.isFinite(row.seconds) &&
+    row.seconds >= 0 &&
     typeof row.timestamp === "number"
   );
 }
@@ -261,6 +321,8 @@ export function migrateGameArchive(raw: unknown): GameArchive | null {
     date,
     hits,
     speedRecords,
+    speedColumns: filterTyped(obj.speedColumns, isSpeedColumn),
+    speedMarks: filterTyped(obj.speedMarks, isSpeedMark),
     flyCatchAttempts: filterTyped(obj.flyCatchAttempts, isFlyCatchAttempt),
     strikeJudgeColumns: filterTyped(
       obj.strikeJudgeColumns,
@@ -298,6 +360,8 @@ export function createGameArchive(
     date: new Date().toISOString(),
     hits,
     speedRecords,
+    speedColumns: skills.speedColumns ?? [],
+    speedMarks: skills.speedMarks ?? [],
     flyCatchAttempts: skills.flyCatchAttempts,
     strikeJudgeColumns: skills.strikeJudgeColumns,
     strikeJudgeCells: skills.strikeJudgeCells,

@@ -9,6 +9,7 @@ import type {
 } from "@/lib/gameArchive";
 import type { PendingHit } from "@/hooks/useTestDaySession";
 import SoftballFieldSvg from "@/components/test-day/SoftballFieldSvg";
+import { RecordActions } from "@/components/records/RecordActions";
 import {
   HIT_QUALITY_LABELS,
   HIT_QUALITY_OPTIONS,
@@ -40,6 +41,9 @@ interface TeeBallPanelProps {
   onCancelHit: () => void;
   onUndo: () => void;
   onClearAll: () => void;
+  editingHitId: string | null;
+  onBeginEditHit: (hitId: string) => void;
+  onDeleteHit: (hitId: string) => void;
 }
 
 export default function TeeBallPanel({
@@ -62,6 +66,9 @@ export default function TeeBallPanel({
   onCancelHit,
   onUndo,
   onClearAll,
+  editingHitId,
+  onBeginEditHit,
+  onDeleteHit,
 }: TeeBallPanelProps) {
   return (
     <div className="flex flex-col gap-4">
@@ -158,11 +165,11 @@ export default function TeeBallPanel({
           disabled={!isEntryPanelActive}
           className="flex-1 bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
         >
-          ✅ 确认记录 | Confirm
+          {editingHitId ? "保存修改" : "✅ 确认记录 | Confirm"}
         </button>
         <button
           onClick={onCancelHit}
-          disabled={!pendingHit}
+          disabled={!pendingHit && !editingHitId}
           className="flex-1 bg-gray-200 py-2 text-sm text-zinc-700 transition-colors hover:bg-gray-300 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:hover:bg-zinc-300"
         >
           ❌ 取消 | Cancel
@@ -207,9 +214,22 @@ export default function TeeBallPanel({
               : ` 坐标: X: ${hit.x.toFixed(1)}%, Y: ${hit.y.toFixed(1)}%`;
 
           return (
-            <li key={hit.id}>
-              #{index + 1} — [{HIT_RESULT_LABELS[hit.result]}]{infoText}
-              {coordText}
+            <li
+              key={hit.id}
+              className={`flex items-start justify-between gap-2 ${
+                editingHitId === hit.id ? "text-zinc-900" : ""
+              }`}
+            >
+              <span>
+                #{index + 1} — [{HIT_RESULT_LABELS[hit.result]}]{infoText}
+                {coordText}
+                {editingHitId === hit.id ? " · 修改中" : ""}
+              </span>
+              <RecordActions
+                onEdit={() => onBeginEditHit(hit.id)}
+                onDelete={() => onDeleteHit(hit.id)}
+                deleteConfirm="确认删除这条打击记录？"
+              />
             </li>
           );
         })}

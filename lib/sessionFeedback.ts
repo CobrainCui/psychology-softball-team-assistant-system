@@ -84,3 +84,51 @@ export function appendSessionFeedbackDraft(
   );
   return full;
 }
+
+function writeSessionFeedbackDrafts(entries: SessionFeedbackEntry[]): void {
+  localStorage.setItem(STORAGE_KEYS.sessionFeedback, JSON.stringify(entries));
+}
+
+export function updateSessionFeedbackDraft(
+  id: string,
+  patch: Partial<
+    Pick<
+      SessionFeedbackEntry,
+      "activityType" | "sessionRpe" | "durationMin" | "note"
+    >
+  >
+): SessionFeedbackEntry | null {
+  const existing = loadSessionFeedbackDrafts();
+  const index = existing.findIndex((entry) => entry.id === id);
+  if (index === -1) return null;
+  const current = existing[index]!;
+  const sessionRpe = patch.sessionRpe ?? current.sessionRpe;
+  const durationMin = patch.durationMin ?? current.durationMin;
+  const next: SessionFeedbackEntry = {
+    ...current,
+    ...patch,
+    sessionRpe,
+    durationMin,
+    sessionLoad: computeSessionLoad(sessionRpe, durationMin),
+    timestamp: Date.now(),
+  };
+  const updated = [...existing];
+  updated[index] = next;
+  writeSessionFeedbackDrafts(updated);
+  return next;
+}
+
+export function deleteSessionFeedbackDraft(id: string): void {
+  writeSessionFeedbackDrafts(
+    loadSessionFeedbackDrafts().filter((entry) => entry.id !== id)
+  );
+}
+
+export function loadPlayerSessionFeedbackDrafts(
+  playerId: string,
+  date: string
+): SessionFeedbackEntry[] {
+  return loadSessionFeedbackDrafts().filter(
+    (entry) => entry.playerId === playerId && entry.date === date
+  );
+}

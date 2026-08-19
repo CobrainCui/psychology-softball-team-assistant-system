@@ -10,7 +10,8 @@ import {
   type HitResult,
   type PitchCall,
   type PitchType,
-  type SpeedRecord,
+  type SpeedColumn,
+  type SpeedMark,
   type StrikeJudgeCell,
   type StrikeJudgeColumn,
   type ThrowPlay,
@@ -21,11 +22,23 @@ import {
   type Assignments,
   clearSessionDraft,
   DEFAULT_TEST_ITEMS,
+  isDefaultTestItem,
   loadSessionDraft,
   saveSessionDraft,
   SESSION_DRAFT_SCHEMA_VERSION,
 } from "@/lib/sessionDraft";
+import {
+  buildAssignmentCommitSummary,
+  cloneAssignments,
+  diffAssignments,
+  type AssignmentCommit,
+} from "@/lib/testDay/assignmentLog";
 import { ADD_CUSTOM_TEST_PANEL_ID } from "@/components/test-day/hitLabels";
+import {
+  createDefaultSpeedColumns,
+  isDefaultSpeedColumnId,
+  parseSpeedSeconds,
+} from "@/lib/testDay/speedGrid";
 
 export interface PendingHit {
   x: number;
@@ -33,11 +46,6 @@ export interface PendingHit {
 }
 
 export type SidebarMode = "byPlayer" | "byTest";
-
-export type SpeedInputs = Record<
-  string,
-  { firstBase: string; secondBase: string; custom: string }
->;
 
 export function useTestDaySession() {
   const [hits, setHits] = useState<HitRecord[]>([]);
@@ -54,8 +62,10 @@ export function useTestDaySession() {
   const [assignments, setAssignments] = useState<Assignments>({});
   const [testItems, setTestItems] = useState<string[]>([...DEFAULT_TEST_ITEMS]);
   const [customTestName, setCustomTestName] = useState("");
-  const [speedRecords, setSpeedRecords] = useState<SpeedRecord[]>([]);
-  const [speedInputs, setSpeedInputs] = useState<SpeedInputs>({});
+  const [speedColumns, setSpeedColumns] = useState<SpeedColumn[]>(
+    createDefaultSpeedColumns()
+  );
+  const [speedMarks, setSpeedMarks] = useState<SpeedMark[]>([]);
   const [flyCatchAttempts, setFlyCatchAttempts] = useState<FlyCatchAttempt[]>(
     []
   );
@@ -69,14 +79,27 @@ export function useTestDaySession() {
     []
   );
   const [throwPlays, setThrowPlays] = useState<ThrowPlay[]>([]);
+  const [assignmentLocked, setAssignmentLocked] = useState(false);
+  const [committedAssignments, setCommittedAssignments] = useState<Assignments>(
+    {}
+  );
+  const [assignmentLog, setAssignmentLog] = useState<AssignmentCommit[]>([]);
+  const [editingHitId, setEditingHitId] = useState<string | null>(null);
+  const [editingFlyCatchId, setEditingFlyCatchId] = useState<string | null>(
+    null
+  );
 
   // 名册由 app/page.tsx 通过 getPlayers() 注入；此处只恢复当场草稿
   useEffect(() => {
     const draft = loadSessionDraft();
     setHits(draft.hits);
-    setSpeedRecords(draft.speedRecords);
+    setSpeedColumns(draft.speedColumns);
+    setSpeedMarks(draft.speedMarks);
     setAssignments(draft.assignments);
     setTestItems(draft.testItems);
+    setAssignmentLocked(draft.assignmentLocked);
+    setCommittedAssignments(draft.committedAssignments);
+    setAssignmentLog(draft.assignmentLog);
     setFlyCatchAttempts(draft.flyCatchAttempts);
     setStrikeJudgeColumns(draft.strikeJudgeColumns);
     setStrikeJudgeCells(draft.strikeJudgeCells);
@@ -89,9 +112,14 @@ export function useTestDaySession() {
     saveSessionDraft({
       schemaVersion: SESSION_DRAFT_SCHEMA_VERSION,
       hits,
-      speedRecords,
+      speedRecords: [],
+      speedColumns,
+      speedMarks,
       assignments,
       testItems,
+      assignmentLocked,
+      committedAssignments,
+      assignmentLog,
       flyCatchAttempts,
       strikeJudgeColumns,
       strikeJudgeCells,
@@ -99,9 +127,13 @@ export function useTestDaySession() {
     });
   }, [
     hits,
-    speedRecords,
+    speedColumns,
+    speedMarks,
     assignments,
     testItems,
+    assignmentLocked,
+    committedAssignments,
+    assignmentLog,
     flyCatchAttempts,
     strikeJudgeColumns,
     strikeJudgeCells,
@@ -113,7 +145,10 @@ export function useTestDaySession() {
   const batterHits = hits.filter((hit) => hit.playerId === currentBatterId);
   const isEntryPanelActive = currentResult === "MISS" || pendingHit !== null;
   const showPitchQualityPanel = currentResult !== "MISS" && pendingHit !== null;
-  const plottableHits = batterHits.filter((hit) => hit.result !== "MISS");
+  const plottableHits = batterHits.filter(
+    (hit) => hit.result !== "MISS" && hit.id !== editingHitId
+  );
+
   const speedTestAssignedPlayers = playersAssignedTo(
     "上垒速度",
     players,
@@ -141,8 +176,9 @@ export function useTestDaySession() {
   const handleConfirmHit = () => {
     if (!currentBatter || !isEntryPanelActive) return;
 
-    const newHit: HitRecord = {
-      id: crypto.randomUUID(),
+    // 推导步骤：有 editingHitId 则覆盖同 id；否则追加新打点
+    const nextHit: HitRecord = {
+      id: editingHitId ?? crypto.randomUUID(),
       ...(pendingHit ? { x: pendingHit.x, y: pendingHit.y } : {}),
       result: currentResult,
       playerId: currentBatter.id,
@@ -153,8 +189,12 @@ export function useTestDaySession() {
       timestamp: Date.now(),
     };
 
-    setHits((prev) => [...prev, newHit]);
+    setHits((prev) => {
+      if (!editingHitId) return [...prev, nextHit];
+      return prev.map((hit) => (hit.id === editingHitId ? nextHit : hit));
+    });
     setPendingHit(null);
+    setEditingHitId(null);
     setCurrentHitQuality("Medium");
   };
 
@@ -163,13 +203,40 @@ export function useTestDaySession() {
     if (result === "MISS") setPendingHit(null);
   };
 
-  const handleCancelHit = () => setPendingHit(null);
+  const handleCancelHit = () => {
+    setPendingHit(null);
+    setEditingHitId(null);
+  };
+
+  const handleBeginEditHit = (hitId: string) => {
+    const hit = hits.find((row) => row.id === hitId);
+    if (!hit) return;
+    setCurrentBatterId(hit.playerId);
+    setCurrentResult(hit.result);
+    setEditingHitId(hit.id);
+    if (hit.result === "MISS") {
+      setPendingHit(null);
+    } else {
+      setPendingHit({ x: hit.x ?? 0, y: hit.y ?? 0 });
+    }
+    if (hit.pitchType) setCurrentPitchType(hit.pitchType as PitchType);
+    if (hit.hitQuality) setCurrentHitQuality(hit.hitQuality as HitQuality);
+  };
+
+  const handleDeleteHit = (hitId: string) => {
+    setHits((prev) => prev.filter((hit) => hit.id !== hitId));
+    if (editingHitId === hitId) {
+      setPendingHit(null);
+      setEditingHitId(null);
+    }
+  };
 
   const handleToggleTab = (tab: string) => {
     setActiveTab((prev) => (prev === tab ? null : tab));
   };
 
   const handleToggleAssignment = (playerId: string, testItem: string) => {
+    if (assignmentLocked) return;
     setAssignments((prev) => {
       const current = prev[playerId] ?? [];
       const nextForPlayer = current.includes(testItem)
@@ -180,6 +247,7 @@ export function useTestDaySession() {
   };
 
   const handleSelectAllTestsForPlayer = (playerId: string) => {
+    if (assignmentLocked) return;
     setAssignments((prev) => {
       const current = prev[playerId] ?? [];
       const allSelected =
@@ -193,6 +261,7 @@ export function useTestDaySession() {
   };
 
   const handleSelectAllPlayersForTest = (testItem: string) => {
+    if (assignmentLocked) return;
     setAssignments((prev) => {
       const allSelected =
         players.length > 0 &&
@@ -210,58 +279,65 @@ export function useTestDaySession() {
     });
   };
 
-  const handleSpeedInputChange = (
+  const handleSpeedMarkChange = (
     playerId: string,
-    field: "firstBase" | "secondBase" | "custom",
-    value: string
+    playerName: string,
+    columnId: string,
+    raw: string
   ) => {
-    setSpeedInputs((prev) => ({
-      ...prev,
-      [playerId]: {
-        ...(prev[playerId] ?? { firstBase: "", secondBase: "", custom: "" }),
-        [field]: value,
-      },
-    }));
+    const seconds = parseSpeedSeconds(raw);
+    setSpeedMarks((prev) => {
+      const without = prev.filter(
+        (mark) => !(mark.playerId === playerId && mark.columnId === columnId)
+      );
+      if (seconds === null) return without;
+      const existing = prev.find(
+        (mark) => mark.playerId === playerId && mark.columnId === columnId
+      );
+      return [
+        ...without,
+        {
+          id: existing?.id ?? crypto.randomUUID(),
+          playerId,
+          playerName,
+          columnId,
+          seconds,
+          timestamp: Date.now(),
+        },
+      ];
+    });
   };
 
-  const handleRecordSpeed = (playerId: string, playerName: string) => {
-    const rowInput = speedInputs[playerId] ?? {
-      firstBase: "",
-      secondBase: "",
-      custom: "",
-    };
-
-    const parseSeconds = (raw: string): number | null => {
-      if (raw.trim() === "") return null;
-      const parsed = Number(raw);
-      return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-    };
-
-    const firstBaseSeconds = parseSeconds(rowInput.firstBase);
-    const secondBaseSeconds = parseSeconds(rowInput.secondBase);
-    const customSeconds = parseSeconds(rowInput.custom);
-
-    if (
-      firstBaseSeconds === null &&
-      secondBaseSeconds === null &&
-      customSeconds === null
-    ) {
-      window.alert("请至少填写一项有效的秒数成绩（不可为负数）。");
-      return;
+  const handleAddSpeedColumn = (name: string): boolean => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      window.alert("请输入测试项目名称。");
+      return false;
     }
-
-    setSpeedRecords((prev) => [
+    if (speedColumns.some((column) => column.name === trimmed)) {
+      window.alert("该测试项目已存在，请勿重复添加。");
+      return false;
+    }
+    setSpeedColumns((prev) => [
       ...prev,
       {
         id: crypto.randomUUID(),
-        playerId,
-        playerName,
-        firstBaseSeconds,
-        secondBaseSeconds,
-        customSeconds,
-        timestamp: Date.now(),
+        name: trimmed,
+        sortOrder: prev.length,
       },
     ]);
+    return true;
+  };
+
+  const handleRemoveSpeedColumn = (columnId: string) => {
+    if (isDefaultSpeedColumnId(columnId)) return;
+    setSpeedColumns((prev) =>
+      prev
+        .filter((column) => column.id !== columnId)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((column, index) => ({ ...column, sortOrder: index }))
+    );
+    setSpeedMarks((prev) => prev.filter((mark) => mark.columnId !== columnId));
   };
 
   const handleFlyCatchNoteDraftChange = (playerId: string, value: string) => {
@@ -274,25 +350,64 @@ export function useTestDaySession() {
     caught: boolean
   ) => {
     const note = flyCatchNoteDrafts[playerId]?.trim();
-    setFlyCatchAttempts((prev) => [
+    const editing = editingFlyCatchId
+      ? flyCatchAttempts.find((row) => row.id === editingFlyCatchId)
+      : undefined;
+    setFlyCatchAttempts((prev) => {
+      if (editing && editing.playerId === playerId) {
+        return prev.map((row) =>
+          row.id === editing.id
+            ? {
+                ...row,
+                caught,
+                note: note || undefined,
+                timestamp: Date.now(),
+              }
+            : row
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          playerId,
+          playerName,
+          caught,
+          note: note || undefined,
+          timestamp: Date.now(),
+        },
+      ];
+    });
+    if (editing && editing.playerId === playerId) setEditingFlyCatchId(null);
+  };
+
+  const handleBeginEditFlyCatch = (attemptId: string) => {
+    const row = flyCatchAttempts.find((item) => item.id === attemptId);
+    if (!row) return;
+    setEditingFlyCatchId(row.id);
+    setFlyCatchNoteDrafts((prev) => ({
       ...prev,
-      {
-        id: crypto.randomUUID(),
-        playerId,
-        playerName,
-        caught,
-        note: note || undefined,
-        timestamp: Date.now(),
-      },
-    ]);
+      [row.playerId]: row.note ?? "",
+    }));
+  };
+
+  const handleDeleteFlyCatch = (attemptId: string) => {
+    setFlyCatchAttempts((prev) => prev.filter((row) => row.id !== attemptId));
+    if (editingFlyCatchId === attemptId) setEditingFlyCatchId(null);
   };
 
   const handleUndoFlyCatch = (playerId: string) => {
-    setFlyCatchAttempts((prev) => {
-      const lastIndex = prev.findLastIndex((row) => row.playerId === playerId);
-      if (lastIndex === -1) return prev;
-      return prev.filter((_, index) => index !== lastIndex);
-    });
+    const lastIndex = flyCatchAttempts.findLastIndex(
+      (row) => row.playerId === playerId
+    );
+    if (lastIndex === -1) return;
+    const removed = flyCatchAttempts[lastIndex];
+    if (removed && editingFlyCatchId === removed.id) {
+      setEditingFlyCatchId(null);
+    }
+    setFlyCatchAttempts((prev) =>
+      prev.filter((_, index) => index !== lastIndex)
+    );
   };
 
   const handleAddStrikeJudgeColumn = (
@@ -375,6 +490,19 @@ export function useTestDaySession() {
     );
   };
 
+  const handleRemoveStrikeJudgeColumn = (columnId: string) => {
+    setStrikeJudgeColumns((prev) => {
+      const remaining = prev
+        .filter((column) => column.id !== columnId)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((column, index) => ({ ...column, sortOrder: index }));
+      return remaining;
+    });
+    setStrikeJudgeCells((prev) =>
+      prev.filter((cell) => cell.columnId !== columnId)
+    );
+  };
+
   const handleUpsertThrowPlay = (play: ThrowPlay) => {
     setThrowPlays((prev) => {
       const index = prev.findIndex(
@@ -416,6 +544,72 @@ export function useTestDaySession() {
     }
     setTestItems((prev) => [...prev, trimmedName]);
     setCustomTestName("");
+  };
+
+  const handleRemoveCustomTest = (testItem: string) => {
+    if (isDefaultTestItem(testItem)) return;
+    if (assignmentLocked) return;
+    setTestItems((prev) => prev.filter((item) => item !== testItem));
+    setAssignments((prev) => {
+      const next: Assignments = {};
+      for (const [playerId, items] of Object.entries(prev)) {
+        next[playerId] = items.filter((item) => item !== testItem);
+      }
+      return next;
+    });
+    if (activeTab === testItem) setActiveTab(null);
+  };
+
+  // 推导步骤：对比上次提交快照 → 写一条报名/修改记录 → 锁定勾选
+  const handleSaveAssignments = (author: string, note: string): boolean => {
+    if (assignmentLocked) return false;
+    const trimmedAuthor = author.trim();
+    if (!trimmedAuthor) {
+      window.alert("请填写修改人。");
+      return false;
+    }
+    const { added, removed } = diffAssignments(
+      committedAssignments,
+      assignments
+    );
+    const isRevision = assignmentLog.length > 0;
+    if (!isRevision && added.length === 0) {
+      window.alert("请先勾选测试报名后再保存。");
+      return false;
+    }
+    if (isRevision && added.length === 0 && removed.length === 0) {
+      window.alert("排阵未改动，无需保存。");
+      return false;
+    }
+    const trimmedNote = note.trim();
+    const summary = buildAssignmentCommitSummary({
+      author: trimmedAuthor,
+      isRevision,
+      added,
+      removed,
+      note: trimmedNote || undefined,
+      players,
+    });
+    setAssignmentLog((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        author: trimmedAuthor,
+        note: trimmedNote || undefined,
+        summary,
+        added,
+        removed,
+        timestamp: Date.now(),
+      },
+    ]);
+    setCommittedAssignments(cloneAssignments(assignments));
+    setAssignmentLocked(true);
+    return true;
+  };
+
+  const handleBeginEditAssignments = () => {
+    if (!assignmentLocked) return;
+    setAssignmentLocked(false);
   };
 
   const handleUndo = () => {
@@ -466,15 +660,20 @@ export function useTestDaySession() {
 
   const clearBoardAfterArchive = () => {
     setHits([]);
-    setSpeedRecords([]);
-    setSpeedInputs({});
+    setSpeedColumns(createDefaultSpeedColumns());
+    setSpeedMarks([]);
     setFlyCatchAttempts([]);
     setFlyCatchNoteDrafts({});
     setStrikeJudgeColumns([]);
     setStrikeJudgeCells([]);
     setThrowPlays([]);
     setAssignments({});
+    setAssignmentLocked(false);
+    setCommittedAssignments({});
+    setAssignmentLog([]);
     setPendingHit(null);
+    setEditingHitId(null);
+    setEditingFlyCatchId(null);
     clearSessionDraft();
   };
 
@@ -483,13 +682,16 @@ export function useTestDaySession() {
     players,
     setPlayers,
     hits,
-    speedRecords,
-    speedInputs,
+    speedColumns,
+    speedMarks,
     flyCatchAttempts,
     flyCatchNoteDrafts,
     strikeJudgeColumns,
     strikeJudgeCells,
     throwPlays,
+    assignmentLocked,
+    assignmentLog,
+    committedAssignments,
     assignments,
     testItems,
     customTestName,
@@ -503,6 +705,8 @@ export function useTestDaySession() {
     currentHitQuality,
     setCurrentHitQuality,
     pendingHit,
+    editingHitId,
+    editingFlyCatchId,
     activeTab,
     sidebarMode,
     setSidebarMode,
@@ -525,19 +729,28 @@ export function useTestDaySession() {
     handleToggleAssignment,
     handleSelectAllTestsForPlayer,
     handleSelectAllPlayersForTest,
-    handleSpeedInputChange,
-    handleRecordSpeed,
+    handleSaveAssignments,
+    handleBeginEditAssignments,
+    handleSpeedMarkChange,
+    handleAddSpeedColumn,
+    handleRemoveSpeedColumn,
     handleFlyCatchNoteDraftChange,
     handleRecordFlyCatch,
+    handleBeginEditFlyCatch,
+    handleDeleteFlyCatch,
     handleUndoFlyCatch,
     handleAddStrikeJudgeColumn,
     handleInitStrikeJudgeColumns,
     handleReorderStrikeJudgeColumns,
     handleUpsertStrikeJudgeCell,
     handleClearStrikeJudgeCell,
+    handleRemoveStrikeJudgeColumn,
     handleUpsertThrowPlay,
     handleClearThrowPlay,
     handleAddCustomTest,
+    handleRemoveCustomTest,
+    handleBeginEditHit,
+    handleDeleteHit,
     handleUndo,
     handleClearAll,
     handleAddPlayer,

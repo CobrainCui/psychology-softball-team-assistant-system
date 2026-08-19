@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import MedicalDisclaimer from "@/components/MedicalDisclaimer";
+import { RecordActions } from "@/components/records/RecordActions";
 import { BatteryDriveChart } from "@/components/status/BatteryDriveChart";
 import { ScaleSlider } from "@/components/status/ScaleSlider";
 import {
@@ -17,16 +18,20 @@ import { buildCycleAssessmentBundle } from "@/lib/clinical/buildCycleAssessment"
 import type { CycleGuidance } from "@/lib/clinical/cycleGuidance";
 import {
   getTodayDateStr,
+  removeReadinessEntry,
   upsertReadinessEntry,
   type ReadinessHistoryEntry,
 } from "@/lib/readinessHistory";
 import {
   consentToCycleTracking,
+  deletePeriodStartEvent,
+  deleteReadinessAssessment,
   getCycleProfile,
   getReadinessHistory,
+  recordPeriodStart,
   saveReadinessAssessment,
   updateCycleProfileSettings,
-  recordPeriodStart,
+  updatePeriodStartEvent,
 } from "@/lib/actions";
 import type {
   CycleEnergyLevel,
@@ -65,6 +70,7 @@ export default function AssessmentPage() {
   const [consentBusy, setConsentBusy] = useState(false);
   const [history, setHistory] = useState<ReadinessHistoryEntry[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [hasTodayCheck, setHasTodayCheck] = useState(false);
   const [result, setResult] = useState<ResultView | null>(null);
 
   useEffect(() => {
@@ -80,8 +86,23 @@ export default function AssessmentPage() {
       if (!readinessRes.success) {
         console.error("cloud denied:", readinessRes.error);
         setHistory([]);
+        setHasTodayCheck(false);
       } else {
         setHistory(readinessRes.history);
+        const today = getTodayDateStr();
+        const todayEntry = readinessRes.history.find(
+          (item) => item.date === today
+        );
+        if (todayEntry) {
+          setSleep(todayEntry.sleep);
+          setStress(todayEntry.stress);
+          setFatigue(todayEntry.fatigue);
+          setSoreness(todayEntry.soreness);
+          setWillingness(todayEntry.willingness);
+          setHasTodayCheck(true);
+        } else {
+          setHasTodayCheck(false);
+        }
       }
       if (currentUser.gender === "female") {
         const cycleRes = await getCycleProfile(currentUser.playerId);
@@ -169,10 +190,12 @@ export default function AssessmentPage() {
       });
       if (res.success) {
         window.alert("云端打卡成功！");
+        setHasTodayCheck(true);
       } else {
         console.error("cloud denied:", res.error);
         window.alert("云端同步失败，已保存为本地草稿。");
         upsertReadinessEntry(entry);
+        setHasTodayCheck(true);
       }
       setHistory((prev) => {
         const withoutSameDay = prev.filter(
@@ -225,17 +248,91 @@ export default function AssessmentPage() {
     setCycleProfile(res.profile);
   };
 
-  const handlePeriodDateChange = async (next: string) => {
-    setPeriodStartDate(next);
+  const handleDeleteToday = async () => {
     if (!currentUser) return;
-    persistPeriodStartDate(currentUser.playerId, next);
-    if (!cycleTracking || !next) return;
+    const date = getTodayDateStr();
+    const res = await deleteReadinessAssessment({
+      playerId: currentUser.playerId,
+      date,
+    });
+    if (!res.success && res.error !== "没有今日评估记录") {
+      console.error("云端被拒:", res.error);
+      window.alert(res.error);
+      return;
+    }
+    removeReadinessEntry(currentUser.playerId, date);
+    setHistory((prev) =>
+      prev.filter(
+        (item) =>
+          !(item.playerId === currentUser.playerId && item.date === date)
+      )
+    );
+    setHasTodayCheck(false);
+    setResult(null);
+  };
+
+  const applyCycleProfile = (
+    profile: NonNullable<typeof cycleProfile>
+  ) => {
+    setCycleProfile(profile);
+    if (profile.lastPeriodStart && currentUser) {
+      setPeriodStartDate(profile.lastPeriodStart);
+      persistPeriodStartDate(currentUser.playerId, profile.lastPeriodStart);
+    }
+  };
+
+  const handleRecordPeriodStart = async () => {
+    if (!currentUser || !cycleTracking || !periodStartDate) return;
+    persistPeriodStartDate(currentUser.playerId, periodStartDate);
     const res = await recordPeriodStart({
       playerId: currentUser.playerId,
-      date: next,
+      date: periodStartDate,
       crampsScore,
     });
-    if (res.success) setCycleProfile(res.profile);
+    if (!res.success) {
+      window.alert(res.error);
+      return;
+    }
+    applyCycleProfile(res.profile);
+  };
+
+  const handleUpdatePeriodEvent = async (
+    eventId: string,
+    patch: { date?: string; crampsScore?: number | null }
+  ) => {
+    if (!currentUser) return;
+    const res = await updatePeriodStartEvent({
+      playerId: currentUser.playerId,
+      eventId,
+      ...patch,
+    });
+    if (!res.success) {
+      window.alert(res.error);
+      return;
+    }
+    applyCycleProfile(res.profile);
+  };
+
+  const handleDeletePeriodEvent = async (eventId: string) => {
+    if (!currentUser) return;
+    const res = await deletePeriodStartEvent({
+      playerId: currentUser.playerId,
+      eventId,
+    });
+    if (!res.success) {
+      window.alert(res.error);
+      return;
+    }
+    applyCycleProfile(res.profile);
+    if (!res.profile.lastPeriodStart) {
+      persistPeriodStartDate(currentUser.playerId, "");
+      setPeriodStartDate("");
+    }
+  };
+
+  const handlePeriodDateChange = (next: string) => {
+    setPeriodStartDate(next);
+    if (currentUser) persistPeriodStartDate(currentUser.playerId, next);
   };
 
   const patchCycleSettings = async (
@@ -309,7 +406,12 @@ export default function AssessmentPage() {
                 cycleEnergy={cycleEnergy}
                 cycleMood={cycleMood}
                 cycleIrregular={cycleIrregular}
-                onPeriodDateChange={(next) => void handlePeriodDateChange(next)}
+                onPeriodDateChange={handlePeriodDateChange}
+                onRecordPeriodStart={() => void handleRecordPeriodStart()}
+                onUpdatePeriodEvent={(event, patch) =>
+                  void handleUpdatePeriodEvent(event.id, patch)
+                }
+                onDeletePeriodEvent={(id) => void handleDeletePeriodEvent(id)}
                 onCramps={setCrampsScore}
                 onEnergy={setCycleEnergy}
                 onMood={setCycleMood}
@@ -325,8 +427,16 @@ export default function AssessmentPage() {
           disabled={isLoadingHistory}
           className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500"
         >
-          生成今日四象限反馈
+          {hasTodayCheck ? "更新今日四象限反馈" : "生成今日四象限反馈"}
         </button>
+        {hasTodayCheck ? (
+          <div className="flex justify-end">
+            <RecordActions
+              onDelete={() => void handleDeleteToday()}
+              deleteConfirm="确认删除今日评估记录？"
+            />
+          </div>
+        ) : null}
         {result && (
           <div className="flex flex-col gap-3 border-2 border-zinc-900 bg-white p-4">
             <CycleResultExtras

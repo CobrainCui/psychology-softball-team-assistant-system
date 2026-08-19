@@ -31,6 +31,7 @@ interface StrikeJudgePanelProps {
     swung: boolean
   ) => void;
   onClearCell: (columnId: string, judgeId: string) => void;
+  onRemoveColumn: (columnId: string) => void;
 }
 
 function cellSummary(cell: StrikeJudgeCell | undefined): string {
@@ -51,6 +52,7 @@ export default function StrikeJudgePanel({
   onReorderColumns,
   onUpsertCell,
   onClearCell,
+  onRemoveColumn,
 }: StrikeJudgePanelProps) {
   const [selection, setSelection] = useState<MatrixSelection | null>(null);
   const dragFromIndex = useRef<number | null>(null);
@@ -132,6 +134,18 @@ export default function StrikeJudgePanel({
                     好球率 {columnStrikeRate(column.id, cells)}
                   </div>
                   <div className="text-[10px] text-zinc-400">长按列头拖动</div>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!confirm("确认删除这一投手列及其判定格？")) return;
+                      onRemoveColumn(column.id);
+                    }}
+                    className="mt-1 border border-red-300 px-1 py-0.5 text-[10px] font-normal text-red-600 hover:bg-red-50"
+                  >
+                    删除
+                  </button>
                 </th>
               ))}
               <th className="border border-zinc-300 px-2 py-2">
@@ -238,12 +252,13 @@ export default function StrikeJudgePanel({
             <button
               type="button"
               onClick={() => {
+                if (!confirm("确认删除这一格？")) return;
                 onClearCell(selection.columnId, selection.judgeId);
                 setSelection(null);
               }}
               className="border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
             >
-              清空此格
+              删除
             </button>
           </div>
         </div>

@@ -1,32 +1,57 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Player } from "@/lib/players";
 import type { Assignments } from "@/lib/sessionDraft";
+import type { AssignmentCommit } from "@/lib/testDay/assignmentLog";
 import type { SidebarMode } from "@/hooks/useTestDaySession";
+import { useCurrentUser } from "@/lib/currentUser";
 
 interface AssignmentSidebarProps {
   players: Player[];
   testItems: string[];
   assignments: Assignments;
+  assignmentLocked: boolean;
+  assignmentLog: AssignmentCommit[];
   sidebarMode: SidebarMode;
   onSidebarModeChange: (mode: SidebarMode) => void;
   onAddPlayer: () => void;
   onToggleAssignment: (playerId: string, testItem: string) => void;
   onSelectAllTestsForPlayer: (playerId: string) => void;
   onSelectAllPlayersForTest: (testItem: string) => void;
+  onSaveAssignments: (author: string, note: string) => boolean;
+  onBeginEditAssignments: () => void;
 }
 
 export default function AssignmentSidebar({
   players,
   testItems,
   assignments,
+  assignmentLocked,
+  assignmentLog,
   sidebarMode,
   onSidebarModeChange,
   onAddPlayer,
   onToggleAssignment,
   onSelectAllTestsForPlayer,
   onSelectAllPlayersForTest,
+  onSaveAssignments,
+  onBeginEditAssignments,
 }: AssignmentSidebarProps) {
+  const { currentUser, isMounted } = useCurrentUser();
+  const [author, setAuthor] = useState("");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (!isMounted || !currentUser?.playerName) return;
+    setAuthor((prev) => (prev.trim() ? prev : currentUser.playerName));
+  }, [isMounted, currentUser]);
+
+  const handleSave = () => {
+    const ok = onSaveAssignments(author, note);
+    if (ok) setNote("");
+  };
+
   return (
     <aside className="w-full shrink-0 rounded-md border border-zinc-200 bg-gray-50 p-4 md:w-80">
       <div className="flex flex-col gap-4">
@@ -82,7 +107,8 @@ export default function AssignmentSidebar({
                   <button
                     type="button"
                     onClick={() => onSelectAllTestsForPlayer(player.id)}
-                    className="shrink-0 px-2 py-1 text-xs text-zinc-400 transition-colors hover:text-zinc-700"
+                    disabled={assignmentLocked}
+                    className="shrink-0 px-2 py-1 text-xs text-zinc-400 transition-colors hover:text-zinc-700 disabled:text-zinc-300"
                   >
                     全选
                   </button>
@@ -91,11 +117,14 @@ export default function AssignmentSidebar({
                   {testItems.map((item) => (
                     <label
                       key={item}
-                      className="flex items-center gap-1.5 text-xs text-zinc-700"
+                      className={`flex items-center gap-1.5 text-xs ${
+                        assignmentLocked ? "text-zinc-400" : "text-zinc-700"
+                      }`}
                     >
                       <input
                         type="checkbox"
                         className="h-3.5 w-3.5 accent-zinc-900"
+                        disabled={assignmentLocked}
                         checked={assignments[player.id]?.includes(item) ?? false}
                         onChange={() => onToggleAssignment(player.id, item)}
                       />
@@ -118,7 +147,8 @@ export default function AssignmentSidebar({
                   <button
                     type="button"
                     onClick={() => onSelectAllPlayersForTest(item)}
-                    className="shrink-0 px-2 py-1 text-xs text-zinc-400 transition-colors hover:text-zinc-700"
+                    disabled={assignmentLocked}
+                    className="shrink-0 px-2 py-1 text-xs text-zinc-400 transition-colors hover:text-zinc-700 disabled:text-zinc-300"
                   >
                     全选
                   </button>
@@ -127,11 +157,14 @@ export default function AssignmentSidebar({
                   {players.map((player) => (
                     <label
                       key={player.id}
-                      className="flex items-center gap-1.5 text-xs text-zinc-700"
+                      className={`flex items-center gap-1.5 text-xs ${
+                        assignmentLocked ? "text-zinc-400" : "text-zinc-700"
+                      }`}
                     >
                       <input
                         type="checkbox"
                         className="h-3.5 w-3.5 accent-zinc-900"
+                        disabled={assignmentLocked}
                         checked={
                           assignments[player.id]?.includes(item) ?? false
                         }
@@ -145,6 +178,68 @@ export default function AssignmentSidebar({
             ))}
           </div>
         )}
+
+        <div className="flex flex-col gap-2 border-t border-zinc-200 pt-3">
+          <p className="text-xs text-zinc-500">
+            {assignmentLocked
+              ? "已保存 · 点击修改后才能改勾选"
+              : assignmentLog.length > 0
+                ? "修改中 · 保存后写入修改记录"
+                : "未保存 · 勾选后填写修改人并保存"}
+          </p>
+          <input
+            type="text"
+            value={author}
+            onChange={(e) => setAuthor(e.target.value)}
+            disabled={assignmentLocked}
+            placeholder="修改人"
+            className="w-full border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 disabled:bg-zinc-100 disabled:text-zinc-500"
+          />
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            disabled={assignmentLocked}
+            placeholder="备注（可选）"
+            className="w-full border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 disabled:bg-zinc-100 disabled:text-zinc-500"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={assignmentLocked}
+              className="flex-1 bg-black py-2 text-sm text-white hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500"
+            >
+              保存
+            </button>
+            <button
+              type="button"
+              onClick={onBeginEditAssignments}
+              disabled={!assignmentLocked}
+              className="flex-1 border border-zinc-400 py-2 text-sm text-zinc-800 hover:bg-zinc-100 disabled:border-zinc-200 disabled:text-zinc-400"
+            >
+              修改
+            </button>
+          </div>
+        </div>
+
+        {assignmentLog.length > 0 ? (
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs font-medium tracking-wide text-zinc-500">
+              修改记录
+            </p>
+            <ul className="flex max-h-48 flex-col gap-1.5 overflow-y-auto text-xs text-zinc-600">
+              {assignmentLog.map((entry) => (
+                <li
+                  key={entry.id}
+                  className="border border-zinc-200 bg-white px-2 py-1.5 leading-relaxed"
+                >
+                  {entry.summary}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </aside>
   );

@@ -6,6 +6,12 @@ export type CycleSharingLevel = "none" | "load_only" | "phase_label";
 export type CycleEnergyLevel = "low" | "mid" | "high";
 export type CycleMoodLevel = "steady" | "irritable" | "low";
 
+export type PeriodStartEventDto = {
+  id: string;
+  date: string;
+  crampsScore: number | null;
+};
+
 export type CycleProfileDto = {
   trackingEnabled: boolean;
   sharingLevel: CycleSharingLevel;
@@ -14,6 +20,7 @@ export type CycleProfileDto = {
   bodyImageAnxietyOptIn: boolean;
   consentAt: string | null;
   periodStartDates: string[];
+  periodStartEvents: PeriodStartEventDto[];
   lastPeriodStart: string | null;
   resolvedLengthDays: number;
   confidence: CycleConfidence;

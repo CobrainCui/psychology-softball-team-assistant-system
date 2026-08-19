@@ -18,6 +18,7 @@ import { resolveCycleLength } from "@/lib/clinical/cycleStats";
 import type {
   CycleProfileDto,
   CycleSharingLevel,
+  PeriodStartEventDto,
 } from "@/lib/cycleTypes";
 import { parseDateOnly, formatDateOnly } from "@/lib/dateOnly";
 import {
@@ -26,11 +27,21 @@ import {
   getPlayerProfileData,
   getReadinessHistory,
   saveReadinessAssessment,
+  deleteReadinessAssessment,
   saveSessionFeedback,
+  getSessionFeedbacks,
+  updateSessionFeedback,
+  deleteSessionFeedback,
   createInjuryCase,
   addInjuryPainLog,
   addInjuryNote,
   markInjuryRecovered,
+  updateInjuryCase,
+  deleteInjuryCase,
+  updateInjuryPainLog,
+  deleteInjuryPainLog,
+  updateInjuryNote,
+  deleteInjuryNote,
 } from "@/lib/statusActions";
 
 export {
@@ -39,20 +50,33 @@ export {
   getPlayerProfileData,
   getReadinessHistory,
   saveReadinessAssessment,
+  deleteReadinessAssessment,
   saveSessionFeedback,
+  getSessionFeedbacks,
+  updateSessionFeedback,
+  deleteSessionFeedback,
   createInjuryCase,
   addInjuryPainLog,
   addInjuryNote,
   markInjuryRecovered,
+  updateInjuryCase,
+  deleteInjuryCase,
+  updateInjuryPainLog,
+  deleteInjuryPainLog,
+  updateInjuryNote,
+  deleteInjuryNote,
 };
 export type {
   CoachDaySummary,
   CoachPlotPoint,
   CoachSessionFeedbackRow,
   InjuryCaseDto,
+  InjuryNoteDto,
+  InjuryPainLogDto,
   ProfileLatestStatus,
   SaveReadinessPayload,
   SaveSessionFeedbackPayload,
+  SessionFeedbackSaved,
 } from "@/lib/statusActions";
 
 export type {
@@ -265,13 +289,24 @@ function asCycleSharingLevel(value: unknown): CycleSharingLevel | null {
 
 // ——— 生理周期：知情同意 / 事件 / 个人化长度 ———
 
-async function loadPeriodStartDates(playerId: string): Promise<string[]> {
+async function loadPeriodStartEvents(
+  playerId: string
+): Promise<PeriodStartEventDto[]> {
   const rows = await prisma.cycleEvent.findMany({
     where: { playerId, eventType: "period_start" },
     orderBy: { date: "asc" },
-    select: { date: true },
+    select: { id: true, date: true, crampsScore: true },
   });
-  return rows.map((r) => formatDateOnly(r.date));
+  return rows.map((r) => ({
+    id: r.id,
+    date: formatDateOnly(r.date),
+    crampsScore: r.crampsScore,
+  }));
+}
+
+async function loadPeriodStartDates(playerId: string): Promise<string[]> {
+  const events = await loadPeriodStartEvents(playerId);
+  return events.map((event) => event.date);
 }
 
 async function toCycleProfileDto(
@@ -282,7 +317,8 @@ async function toCycleProfileDto(
   });
   if (!profile) return null;
 
-  const periodStartDates = await loadPeriodStartDates(playerId);
+  const periodStartEvents = await loadPeriodStartEvents(playerId);
+  const periodStartDates = periodStartEvents.map((event) => event.date);
   const resolved = resolveCycleLength(periodStartDates);
 
   return {
@@ -293,6 +329,7 @@ async function toCycleProfileDto(
     bodyImageAnxietyOptIn: profile.bodyImageAnxietyOptIn,
     consentAt: profile.consentAt ? profile.consentAt.toISOString() : null,
     periodStartDates,
+    periodStartEvents,
     lastPeriodStart:
       periodStartDates.length > 0
         ? periodStartDates[periodStartDates.length - 1]!
@@ -511,6 +548,97 @@ export async function recordPeriodStart(
     if (!profile) {
       return { success: false, error: "周期档案读取失败" };
     }
+    return { success: true, profile };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export type UpdatePeriodStartEventPayload = {
+  playerId: string;
+  eventId: string;
+  date?: string;
+  crampsScore?: number | null;
+};
+
+export async function updatePeriodStartEvent(
+  payload: UpdatePeriodStartEventPayload
+): Promise<ActionResult<{ profile: CycleProfileDto }>> {
+  try {
+    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+    const existing = await prisma.cycleEvent.findFirst({
+      where: {
+        id: payload.eventId,
+        playerId: payload.playerId,
+        eventType: "period_start",
+      },
+    });
+    if (!existing) return { success: false, error: "找不到该经期开始记录" };
+
+    const data: { date?: Date; crampsScore?: number | null } = {};
+    if (typeof payload.date === "string") {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.date)) {
+        return { success: false, error: "date 须为 YYYY-MM-DD" };
+      }
+      const nextDate = parseDateOnly(payload.date);
+      const clash = await prisma.cycleEvent.findFirst({
+        where: {
+          playerId: payload.playerId,
+          eventType: "period_start",
+          date: nextDate,
+          NOT: { id: existing.id },
+        },
+      });
+      if (clash) {
+        return { success: false, error: "该日已有经期开始记录" };
+      }
+      data.date = nextDate;
+    }
+    if (payload.crampsScore === null) {
+      data.crampsScore = null;
+    } else if (payload.crampsScore !== undefined) {
+      const cramps = clampScore0to10(payload.crampsScore);
+      if (cramps === null) return { success: false, error: "痛经评分无效" };
+      data.crampsScore = cramps;
+    }
+
+    await prisma.cycleEvent.update({
+      where: { id: existing.id },
+      data,
+    });
+    await refreshTypicalLength(payload.playerId);
+    const profile = await toCycleProfileDto(payload.playerId);
+    if (!profile) return { success: false, error: "周期档案读取失败" };
+    return { success: true, profile };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export async function deletePeriodStartEvent(payload: {
+  playerId: string;
+  eventId: string;
+}): Promise<ActionResult<{ profile: CycleProfileDto }>> {
+  try {
+    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+    const existing = await prisma.cycleEvent.findFirst({
+      where: {
+        id: payload.eventId,
+        playerId: payload.playerId,
+        eventType: "period_start",
+      },
+    });
+    if (!existing) return { success: false, error: "找不到该经期开始记录" };
+    await prisma.cycleEvent.delete({ where: { id: existing.id } });
+    await refreshTypicalLength(payload.playerId);
+    const profile = await toCycleProfileDto(payload.playerId);
+    if (!profile) return { success: false, error: "周期档案读取失败" };
     return { success: true, profile };
   } catch (error) {
     console.error("数据库写入失败的完整原因:", error);

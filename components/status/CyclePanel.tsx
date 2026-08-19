@@ -11,7 +11,9 @@ import type {
   CycleMoodLevel,
   CycleProfileDto,
   CycleSharingLevel,
+  PeriodStartEventDto,
 } from "@/lib/cycleTypes";
+import { RecordActions } from "@/components/records/RecordActions";
 
 export function CycleConsentPanel({
   periodStartDate,
@@ -75,6 +77,9 @@ export function CycleTrackingPanel({
   cycleMood,
   cycleIrregular,
   onPeriodDateChange,
+  onRecordPeriodStart,
+  onUpdatePeriodEvent,
+  onDeletePeriodEvent,
   onCramps,
   onEnergy,
   onMood,
@@ -89,6 +94,12 @@ export function CycleTrackingPanel({
   cycleMood: CycleMoodLevel | null;
   cycleIrregular: boolean;
   onPeriodDateChange: (next: string) => void;
+  onRecordPeriodStart: () => void;
+  onUpdatePeriodEvent: (
+    event: PeriodStartEventDto,
+    patch: { date?: string; crampsScore?: number | null }
+  ) => void;
+  onDeletePeriodEvent: (eventId: string) => void;
   onCramps: (n: number) => void;
   onEnergy: (v: CycleEnergyLevel | null) => void;
   onMood: (v: CycleMoodLevel | null) => void;
@@ -105,14 +116,50 @@ export function CycleTrackingPanel({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1">
-        <span className="text-xs text-zinc-400">上次经期开始日</span>
+        <span className="text-xs text-zinc-400">登记新的经期开始日</span>
         <input
           type="date"
           value={periodStartDate}
           onChange={(e) => onPeriodDateChange(e.target.value)}
           className="border border-zinc-300 px-3 py-2 text-sm text-zinc-900"
         />
+        <button
+          type="button"
+          onClick={onRecordPeriodStart}
+          disabled={!periodStartDate}
+          className="self-start border border-zinc-900 bg-zinc-900 px-3 py-1.5 text-xs text-white disabled:border-zinc-200 disabled:bg-zinc-200 disabled:text-zinc-400"
+        >
+          登记此次开始日
+        </button>
       </div>
+      {(cycleProfile?.periodStartEvents ?? []).length > 0 ? (
+        <ul className="flex flex-col gap-1 border border-zinc-200 p-2">
+          {(cycleProfile?.periodStartEvents ?? []).map((event) => (
+            <li
+              key={event.id}
+              className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600"
+            >
+              <input
+                type="date"
+                value={event.date}
+                onChange={(e) =>
+                  onUpdatePeriodEvent(event, { date: e.target.value })
+                }
+                className="border border-zinc-300 px-2 py-1 text-xs text-zinc-900"
+              />
+              <RecordActions
+                onEdit={() =>
+                  onUpdatePeriodEvent(event, { crampsScore })
+                }
+                onDelete={() => onDeletePeriodEvent(event.id)}
+                deleteConfirm="确认删除这条经期开始记录？"
+              />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-zinc-400">尚未登记经期开始日。</p>
+      )}
       <p className="text-xs leading-relaxed text-zinc-400">
         典型周期约 {cycleProfile?.resolvedLengthDays ?? 28} 天 · 置信度{" "}
         {cycleProfile?.confidence ?? "low"}

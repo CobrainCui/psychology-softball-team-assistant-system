@@ -4,20 +4,60 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import MedicalDisclaimer from "@/components/MedicalDisclaimer";
+import { RecordActions } from "@/components/records/RecordActions";
 import {
   ACTIVITY_TYPE_OPTIONS,
   DURATION_HINT,
   RPE_MINDFUL_PROMPT,
   RPE_SCALE_TICKS,
+  activityTypeLabel,
   type ActivityType,
 } from "@/lib/clinical/activityTypes";
 import type { PostSaveFeedbackView } from "@/lib/clinical/postSaveFeedback";
-import { saveSessionFeedback } from "@/lib/actions";
+import {
+  deleteSessionFeedback,
+  getSessionFeedbacks,
+  saveSessionFeedback,
+  updateSessionFeedback,
+  type SessionFeedbackSaved,
+} from "@/lib/actions";
 import { getTodayDateStr } from "@/lib/readinessHistory";
-import { appendSessionFeedbackDraft } from "@/lib/sessionFeedback";
+import {
+  appendSessionFeedbackDraft,
+  deleteSessionFeedbackDraft,
+  loadPlayerSessionFeedbackDrafts,
+  updateSessionFeedbackDraft,
+  type SessionFeedbackEntry,
+} from "@/lib/sessionFeedback";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 
 const DEFAULT_DURATION_MIN = 90;
+
+type ListedFeedback = {
+  id: string;
+  source: "cloud" | "local";
+  activityType: ActivityType;
+  sessionRpe: number;
+  durationMin: number;
+  sessionLoad: number;
+  note: string | null;
+};
+
+function fromCloud(entry: SessionFeedbackSaved): ListedFeedback {
+  return { ...entry, source: "cloud" };
+}
+
+function fromLocal(entry: SessionFeedbackEntry): ListedFeedback {
+  return {
+    id: entry.id,
+    source: "local",
+    activityType: entry.activityType,
+    sessionRpe: entry.sessionRpe,
+    durationMin: entry.durationMin,
+    sessionLoad: entry.sessionLoad,
+    note: entry.note,
+  };
+}
 
 export default function SessionFeedbackPage() {
   const { currentUser, isMounted } = useRequireAuth();
@@ -30,10 +70,38 @@ export default function SessionFeedbackPage() {
     "idle"
   );
   const [view, setView] = useState<PostSaveFeedbackView | null>(null);
+  const [entries, setEntries] = useState<ListedFeedback[]>([]);
+  const [editing, setEditing] = useState<{
+    id: string;
+    source: "cloud" | "local";
+  } | null>(null);
+
+  const resetForm = () => {
+    setActivityType("batting");
+    setSessionRpe(5);
+    setDurationMin(DEFAULT_DURATION_MIN);
+    setNote("");
+    setEditing(null);
+  };
+
+  const reloadList = async (playerId: string) => {
+    const date = getTodayDateStr();
+    const res = await getSessionFeedbacks(playerId, date);
+    const cloud = res.success ? res.entries.map(fromCloud) : [];
+    if (!res.success) console.error("云端被拒:", res.error);
+    const local = loadPlayerSessionFeedbackDrafts(playerId, date)
+      .filter((draft) => !cloud.some((row) => row.id === draft.id))
+      .map(fromLocal);
+    setEntries([...cloud, ...local]);
+  };
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
-    if (currentUser.role === "coach") router.replace("/coach");
+    if (currentUser.role === "coach") {
+      router.replace("/coach");
+      return;
+    }
+    void reloadList(currentUser.playerId);
   }, [isMounted, currentUser, router]);
 
   const handleSubmit = async () => {
@@ -41,17 +109,49 @@ export default function SessionFeedbackPage() {
     setStatus("saving");
     const date = getTodayDateStr();
     const noteTrimmed = note.trim() ? note.trim().slice(0, 200) : null;
-    const res = await saveSessionFeedback({
+    const payload = {
       playerId: currentUser.playerId,
       date,
       activityType,
       sessionRpe,
       durationMin,
       note: noteTrimmed,
-    });
+    };
+
+    if (editing?.source === "local") {
+      updateSessionFeedbackDraft(editing.id, {
+        activityType,
+        sessionRpe,
+        durationMin,
+        note: noteTrimmed,
+      });
+      setStatus("local");
+      await reloadList(currentUser.playerId);
+      resetForm();
+      return;
+    }
+
+    if (editing?.source === "cloud") {
+      const res = await updateSessionFeedback({ id: editing.id, ...payload });
+      if (res.success) {
+        setStatus("saved");
+        setView(res.view);
+        resetForm();
+      } else {
+        console.error("云端被拒:", res.error);
+        window.alert(res.error);
+        setStatus("idle");
+        return;
+      }
+      await reloadList(currentUser.playerId);
+      return;
+    }
+
+    const res = await saveSessionFeedback(payload);
     if (res.success) {
       setStatus("saved");
       setView(res.view);
+      resetForm();
     } else {
       console.error("云端被拒:", res.error);
       appendSessionFeedbackDraft({
@@ -65,7 +165,38 @@ export default function SessionFeedbackPage() {
       });
       setStatus("local");
       window.alert("云端同步失败，已保存为本地草稿。");
+      resetForm();
     }
+    await reloadList(currentUser.playerId);
+  };
+
+  const handleBeginEdit = (item: ListedFeedback) => {
+    setEditing({ id: item.id, source: item.source });
+    setActivityType(item.activityType);
+    setSessionRpe(item.sessionRpe);
+    setDurationMin(item.durationMin);
+    setNote(item.note ?? "");
+    setView(null);
+    setStatus("idle");
+  };
+
+  const handleDelete = async (item: ListedFeedback) => {
+    if (!currentUser) return;
+    if (item.source === "local") {
+      deleteSessionFeedbackDraft(item.id);
+    } else {
+      const res = await deleteSessionFeedback({
+        playerId: currentUser.playerId,
+        id: item.id,
+      });
+      if (!res.success) {
+        console.error("云端被拒:", res.error);
+        window.alert(res.error);
+        return;
+      }
+    }
+    if (editing?.id === item.id) resetForm();
+    await reloadList(currentUser.playerId);
   };
 
   if (!isMounted || !currentUser || currentUser.role === "coach") return null;
@@ -83,6 +214,28 @@ export default function SessionFeedbackPage() {
           </p>
         </div>
         <MedicalDisclaimer />
+        {entries.length > 0 ? (
+          <ul className="flex flex-col gap-1 border border-zinc-200 bg-white p-3">
+            {entries.map((item) => (
+              <li
+                key={`${item.source}-${item.id}`}
+                className="flex items-start justify-between gap-2 text-xs text-zinc-600"
+              >
+                <span>
+                  {activityTypeLabel(item.activityType)} · RPE {item.sessionRpe} ·{" "}
+                  {item.durationMin} 分钟 · 负荷 {item.sessionLoad}
+                  {item.source === "local" ? " · 本地草稿" : ""}
+                  {editing?.id === item.id ? " · 修改中" : ""}
+                </span>
+                <RecordActions
+                  onEdit={() => handleBeginEdit(item)}
+                  onDelete={() => void handleDelete(item)}
+                  deleteConfirm="确认删除这条训后反馈？"
+                />
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="flex flex-col gap-2 border border-zinc-200 p-4">
           <label className="text-xs uppercase text-gray-500">活动类型</label>
           <div className="flex flex-wrap gap-1">
@@ -146,14 +299,29 @@ export default function SessionFeedbackPage() {
             className="min-h-20 border border-zinc-300 px-3 py-2 text-sm"
           />
         </div>
-        <button
-          type="button"
-          disabled={status === "saving"}
-          onClick={() => void handleSubmit()}
-          className="bg-black py-2 text-sm text-white hover:bg-zinc-800 disabled:bg-zinc-300"
-        >
-          {status === "saving" ? "提交中…" : "提交训后反馈"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={status === "saving"}
+            onClick={() => void handleSubmit()}
+            className="flex-1 bg-black py-2 text-sm text-white hover:bg-zinc-800 disabled:bg-zinc-300"
+          >
+            {status === "saving"
+              ? "提交中…"
+              : editing
+                ? "保存修改"
+                : "提交训后反馈"}
+          </button>
+          {editing ? (
+            <button
+              type="button"
+              onClick={resetForm}
+              className="border border-zinc-300 px-4 py-2 text-sm"
+            >
+              取消
+            </button>
+          ) : null}
+        </div>
         {view && (
           <div className="flex flex-col gap-2 border-2 border-zinc-900 bg-white p-4">
             <p className="text-sm text-zinc-700">{view.sessionLine}</p>

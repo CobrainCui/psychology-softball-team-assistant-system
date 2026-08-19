@@ -1,0 +1,28 @@
+---
+description: 可填写记录必须提供修改与删除；云端默认仅本人当日；测试日归档后只读
+alwaysApply: true
+---
+
+# 可填写记录的修改与删除
+
+凡新增「用户填写并落库」的模块，必须同时提供**修改**和**删除**，不得只做创建。后续测试项、评估、日志、备注一律遵守，不要只在当前页面补按钮。
+
+## 必须
+
+- 每条已保存记录有稳定 `id`；列表行使用 `components/records/RecordActions.tsx`。
+- 测试日未归档草稿：按 id 随时改删（`hooks/useTestDaySession.ts` + 对应面板）。
+- 已上云记录：默认仅**本人**且记录 `date ===` `isTodayDateOnly` / `getTodayDateStr()`；服务端再检一次，禁止只靠藏按钮。
+- 删除须 `confirm`；Server Action 返回 `{ success: true } | { success: false, error }`；失败 `console.error` + 用户提示。
+- 新云端写入配套 `updateX` / `deleteX`；所有权按现有 `playerId` 比对。
+
+## 例外
+
+- **经期 `period_start` 事件**：按事件列表改删，不套「事件日期必须是今天」。
+- **测试日一旦归档**：`TestSession` 及嵌套成绩只读，不提供归档后 PATCH/DELETE。
+- **不删名册**（`Player`）、不删 `CycleProfile` 整档。
+- 登录框、教练日期筛选、排阵勾选、同意开关不算「已保存业务记录」。
+
+## 禁止
+
+- 只给当前页做一次性改删、新填写板块却没有。
+- 无确认的删除；空 `catch`；归档后改历史测试日。

@@ -214,6 +214,7 @@ export default function ThrowMatrixPanel({
               <button
                 type="button"
                 onClick={() => {
+                  if (!confirm("确认删除这一格？")) return;
                   onClearPlay(testItem, selection.throwerId, selection.firstBaseId);
                   setSelection(null);
                   setNoteDraft("");
@@ -221,7 +222,7 @@ export default function ThrowMatrixPanel({
                 }}
                 className="border border-red-300 px-3 py-2 text-xs text-red-600 hover:bg-red-50"
               >
-                清空
+                删除
               </button>
             </div>
           ) : (

@@ -9,6 +9,8 @@ import {
   type HitResult,
   type PitchCall,
   type PitchType,
+  type SpeedColumn,
+  type SpeedMark,
   type SpeedRecord,
   type StrikeJudgeCell,
   type StrikeJudgeColumn,
@@ -16,6 +18,7 @@ import {
   type ThrowPlay,
   type ThrowTestItem,
 } from "@/lib/gameArchive";
+import { resolveSpeedGrid } from "@/lib/testDay/speedGrid";
 
 type SessionWithRelations = {
   schemaVersion: number;
@@ -37,6 +40,19 @@ type SessionWithRelations = {
     firstBaseSeconds: number | null;
     secondBaseSeconds: number | null;
     customSeconds: number | null;
+    recordedAt: Date;
+    player: { id: string; name: string };
+  }[];
+  speedColumns?: {
+    id: string;
+    name: string;
+    sortOrder: number;
+  }[];
+  speedMarks?: {
+    id: string;
+    columnId: string;
+    playerId: string;
+    seconds: number;
     recordedAt: Date;
     player: { id: string; name: string };
   }[];
@@ -120,6 +136,10 @@ export const sessionArchiveInclude = {
   speedRecords: {
     include: { player: { select: { id: true, name: true } } },
   },
+  speedColumns: { orderBy: { sortOrder: "asc" as const } },
+  speedMarks: {
+    include: { player: { select: { id: true, name: true } } },
+  },
   flyCatchAttempts: {
     include: { player: { select: { id: true, name: true } } },
   },
@@ -161,6 +181,27 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
     customSeconds: row.customSeconds,
     timestamp: row.recordedAt.getTime(),
   }));
+
+  const mappedColumns: SpeedColumn[] = (session.speedColumns ?? []).map(
+    (column) => ({
+      id: column.id,
+      name: column.name,
+      sortOrder: column.sortOrder,
+    })
+  );
+  const mappedMarks: SpeedMark[] = (session.speedMarks ?? []).map((mark) => ({
+    id: mark.id,
+    playerId: mark.playerId,
+    playerName: mark.player.name,
+    columnId: mark.columnId,
+    seconds: mark.seconds,
+    timestamp: mark.recordedAt.getTime(),
+  }));
+  const speedGrid = resolveSpeedGrid(
+    mappedColumns,
+    mappedMarks,
+    speedRecords
+  );
 
   const flyCatchAttempts: FlyCatchAttempt[] = session.flyCatchAttempts.map(
     (row) => ({
@@ -216,6 +257,8 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
     date: session.archivedAt.toISOString(),
     hits,
     speedRecords,
+    speedColumns: speedGrid.columns,
+    speedMarks: speedGrid.marks,
     flyCatchAttempts,
     strikeJudgeColumns,
     strikeJudgeCells,

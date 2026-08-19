@@ -3,22 +3,28 @@
 import type {
   FlyCatchAttempt,
   HitRecord,
+  SpeedColumn,
+  SpeedMark,
   SpeedRecord,
   StrikeJudgeCell,
   StrikeJudgeColumn,
   ThrowPlay,
 } from "@/lib/gameArchive";
 import type { Assignments } from "@/lib/sessionDraft";
+import type { AssignmentCommit } from "@/lib/testDay/assignmentLog";
 
 export type SessionArchivePayload = {
   hits: HitRecord[];
   speedRecords: SpeedRecord[];
+  speedColumns?: SpeedColumn[];
+  speedMarks?: SpeedMark[];
   flyCatchAttempts?: FlyCatchAttempt[];
   strikeJudgeColumns?: StrikeJudgeColumn[];
   strikeJudgeCells?: StrikeJudgeCell[];
   throwPlays?: ThrowPlay[];
   assignments?: Assignments;
   testItems?: string[];
+  assignmentLog?: AssignmentCommit[];
 };
 
 export function normalizeSessionArchivePayload(
@@ -28,6 +34,8 @@ export function normalizeSessionArchivePayload(
     SessionArchivePayload,
     | "hits"
     | "speedRecords"
+    | "speedColumns"
+    | "speedMarks"
     | "flyCatchAttempts"
     | "strikeJudgeColumns"
     | "strikeJudgeCells"
@@ -37,6 +45,10 @@ export function normalizeSessionArchivePayload(
   return {
     hits: Array.isArray(payload.hits) ? payload.hits : [],
     speedRecords: Array.isArray(payload.speedRecords) ? payload.speedRecords : [],
+    speedColumns: Array.isArray(payload.speedColumns)
+      ? payload.speedColumns
+      : [],
+    speedMarks: Array.isArray(payload.speedMarks) ? payload.speedMarks : [],
     flyCatchAttempts: Array.isArray(payload.flyCatchAttempts)
       ? payload.flyCatchAttempts
       : [],
@@ -56,6 +68,7 @@ export function sessionArchiveHasContent(payload: SessionArchivePayload): boolea
   return (
     data.hits.length > 0 ||
     data.speedRecords.length > 0 ||
+    data.speedMarks.length > 0 ||
     data.flyCatchAttempts.length > 0 ||
     data.strikeJudgeCells.length > 0 ||
     data.throwPlays.length > 0
@@ -73,6 +86,9 @@ export function collectSessionArchivePlayerIds(
   }
   for (const row of data.speedRecords) {
     if (row.playerId) ids.add(row.playerId);
+  }
+  for (const mark of data.speedMarks) {
+    if (mark.playerId) ids.add(mark.playerId);
   }
   for (const row of data.flyCatchAttempts) {
     if (row.playerId) ids.add(row.playerId);

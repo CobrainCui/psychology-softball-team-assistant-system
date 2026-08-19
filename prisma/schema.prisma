@@ -184,6 +184,7 @@ model Player {
   team                 Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
   hits                 Hit[]
   speedRecords         SpeedRecord[]
+  speedMarks           SpeedMark[]
   flyCatchAttempts      FlyCatchAttempt[]
   strikeJudgeColumns    StrikeJudgeColumn[]
   strikeJudgeCells      StrikeJudgeCell[]
@@ -212,11 +213,15 @@ model TestSession {
   assignments   Json?
   /// 当场测试项清单快照
   testItems     Json?
+  /// 排阵 push 记录（修改人 + 添加/删除摘要）
+  assignmentLog Json?
   createdAt     DateTime @default(now())
 
   team               Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
   hits               Hit[]
   speedRecords       SpeedRecord[]
+  speedColumns       SpeedColumn[]
+  speedMarks         SpeedMark[]
   flyCatchAttempts   FlyCatchAttempt[]
   strikeJudgeColumns StrikeJudgeColumn[]
   strikeJudgeCells   StrikeJudgeCell[]
@@ -256,6 +261,36 @@ model SpeedRecord {
   session TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   player  Player      @relation(fields: [playerId], references: [id], onDelete: Restrict)
 
+  @@index([sessionId])
+  @@index([playerId])
+}
+
+model SpeedColumn {
+  id         String   @id
+  sessionId  String
+  name       String
+  sortOrder  Int
+  recordedAt DateTime
+
+  session TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  marks   SpeedMark[]
+
+  @@index([sessionId])
+}
+
+model SpeedMark {
+  id         String   @id @default(cuid())
+  sessionId  String
+  columnId   String
+  playerId   String
+  seconds    Float
+  recordedAt DateTime
+
+  session TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  column  SpeedColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  player  Player      @relation(fields: [playerId], references: [id], onDelete: Restrict)
+
+  @@unique([columnId, playerId])
   @@index([sessionId])
   @@index([playerId])
 }

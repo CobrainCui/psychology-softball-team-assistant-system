@@ -73,6 +73,17 @@ export function upsertReadinessEntry(
   return updated;
 }
 
+export function removeReadinessEntry(
+  playerId: string,
+  date: string
+): ReadinessHistoryEntry[] {
+  const updated = loadReadinessHistory().filter(
+    (item) => !(item.playerId === playerId && item.date === date)
+  );
+  saveReadinessHistory(updated);
+  return updated;
+}
+
 export function loadPlayerReadinessHistory(
   playerId: string
 ): ReadinessHistoryEntry[] {

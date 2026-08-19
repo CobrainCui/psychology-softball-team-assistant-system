@@ -16,8 +16,14 @@ import {
   addInjuryNote,
   addInjuryPainLog,
   createInjuryCase,
+  deleteInjuryCase,
+  deleteInjuryNote,
+  deleteInjuryPainLog,
   getInjuryCases,
   markInjuryRecovered,
+  updateInjuryCase,
+  updateInjuryNote,
+  updateInjuryPainLog,
   type InjuryCaseDto,
 } from "@/lib/actions";
 
@@ -42,6 +48,9 @@ export default function InjuryPage() {
     kind: "treatment" | "rehab";
   } | null>(null);
   const [noteContent, setNoteContent] = useState("");
+  const [editingCaseId, setEditingCaseId] = useState<string | null>(null);
+  const [editingPainLogId, setEditingPainLogId] = useState<string | null>(null);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
 
   const reload = async (playerId: string) => {
     const res = await getInjuryCases(playerId);
@@ -78,10 +87,27 @@ export default function InjuryPage() {
     setRelations([]);
     setNote("");
     setParentCaseId(null);
+    setEditingCaseId(null);
   };
 
   const handleCreate = async () => {
     if (!currentUser) return;
+    if (editingCaseId) {
+      const res = await updateInjuryCase({
+        playerId: currentUser.playerId,
+        caseId: editingCaseId,
+        painArea,
+        locationHint,
+        injuryKind,
+      });
+      if (!res.success) {
+        window.alert(res.error);
+        return;
+      }
+      resetForm();
+      await reload(currentUser.playerId);
+      return;
+    }
     const res = await createInjuryCase({
       playerId: currentUser.playerId,
       painArea,
@@ -103,6 +129,24 @@ export default function InjuryPage() {
 
   const handlePainSave = async () => {
     if (!currentUser || !painTarget) return;
+    if (editingPainLogId) {
+      const res = await updateInjuryPainLog({
+        playerId: currentUser.playerId,
+        logId: editingPainLogId,
+        painScore,
+        painExerciseRelations: relations,
+        note: note || null,
+      });
+      if (!res.success) {
+        window.alert(res.error);
+        return;
+      }
+      setPainTarget(null);
+      setEditingPainLogId(null);
+      setNote("");
+      await reload(currentUser.playerId);
+      return;
+    }
     const res = await addInjuryPainLog({
       playerId: currentUser.playerId,
       caseId: painTarget.id,
@@ -122,6 +166,22 @@ export default function InjuryPage() {
 
   const handleNoteSave = async () => {
     if (!currentUser || !noteTarget) return;
+    if (editingNoteId) {
+      const res = await updateInjuryNote({
+        playerId: currentUser.playerId,
+        noteId: editingNoteId,
+        content: noteContent,
+      });
+      if (!res.success) {
+        window.alert(res.error);
+        return;
+      }
+      setNoteTarget(null);
+      setEditingNoteId(null);
+      setNoteContent("");
+      await reload(currentUser.playerId);
+      return;
+    }
     const res = await addInjuryNote({
       playerId: currentUser.playerId,
       caseId: noteTarget.item.id,
@@ -237,6 +297,8 @@ export default function InjuryPage() {
                 </button>
               ))}
             </div>
+            {!editingCaseId ? (
+              <>
             <label className="text-xs uppercase text-gray-500">
               疼痛 0–10
             </label>
@@ -271,13 +333,15 @@ export default function InjuryPage() {
               onChange={(e) => setNote(e.target.value)}
               className="min-h-16 border border-zinc-300 px-3 py-2 text-sm"
             />
+              </>
+            ) : null}
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => void handleCreate()}
                 className="flex-1 bg-black py-2 text-sm text-white"
               >
-                保存
+                {editingCaseId ? "保存修改" : "保存"}
               </button>
               <button
                 type="button"
@@ -303,10 +367,12 @@ export default function InjuryPage() {
                 setPainScore(c.latestPain ?? 3);
                 setRelations([]);
                 setNote("");
+                setEditingPainLogId(null);
               }}
               onNote={(c, kind) => {
                 setNoteTarget({ item: c, kind });
                 setNoteContent("");
+                setEditingNoteId(null);
               }}
               onRecover={async (c) => {
                 if (!currentUser) return;
@@ -325,12 +391,62 @@ export default function InjuryPage() {
                 setShowNew(true);
                 setTab("today");
               }}
+              onEditCase={(c) => {
+                setPainArea(c.painArea);
+                setInjuryKind(c.injuryKind);
+                setLocationHint(c.locationHint);
+                setEditingCaseId(c.id);
+                setShowNew(true);
+                setTab("today");
+              }}
+              onDeleteCase={async (c) => {
+                if (!currentUser) return;
+                const res = await deleteInjuryCase({
+                  playerId: currentUser.playerId,
+                  caseId: c.id,
+                });
+                if (!res.success) window.alert(res.error);
+                else await reload(currentUser.playerId);
+              }}
+              onEditPain={(c, log) => {
+                setPainTarget(c);
+                setPainScore(log.painScore);
+                setRelations(log.painExerciseRelations);
+                setNote(log.note ?? "");
+                setEditingPainLogId(log.id);
+              }}
+              onDeletePain={async (log) => {
+                if (!currentUser) return;
+                const res = await deleteInjuryPainLog({
+                  playerId: currentUser.playerId,
+                  logId: log.id,
+                });
+                if (!res.success) window.alert(res.error);
+                else await reload(currentUser.playerId);
+              }}
+              onEditNote={(c, noteRow) => {
+                setNoteTarget({ item: c, kind: noteRow.kind });
+                setNoteContent(noteRow.content);
+                setEditingNoteId(noteRow.id);
+              }}
+              onDeleteNote={async (noteRow) => {
+                if (!currentUser) return;
+                const res = await deleteInjuryNote({
+                  playerId: currentUser.playerId,
+                  noteId: noteRow.id,
+                });
+                if (!res.success) window.alert(res.error);
+                else await reload(currentUser.playerId);
+              }}
             />
           ))
         )}
         {painTarget && (
           <div className="flex flex-col gap-2 border border-zinc-900 bg-white p-4">
-            <p className="text-sm">今日疼痛 · {painTarget.painAreaLabel}</p>
+            <p className="text-sm">
+              {editingPainLogId ? "修改今日疼痛" : "今日疼痛"} ·{" "}
+              {painTarget.painAreaLabel}
+            </p>
             <input
               type="range"
               min={0}
@@ -362,11 +478,14 @@ export default function InjuryPage() {
                 onClick={() => void handlePainSave()}
                 className="flex-1 bg-black py-2 text-sm text-white"
               >
-                记录
+                {editingPainLogId ? "保存修改" : "记录"}
               </button>
               <button
                 type="button"
-                onClick={() => setPainTarget(null)}
+                onClick={() => {
+                  setPainTarget(null);
+                  setEditingPainLogId(null);
+                }}
                 className="flex-1 border py-2 text-sm"
               >
                 取消
@@ -377,6 +496,7 @@ export default function InjuryPage() {
         {noteTarget && (
           <div className="flex flex-col gap-2 border border-zinc-900 bg-white p-4">
             <p className="text-sm">
+              {editingNoteId ? "修改备注" : ""}
               {noteTarget.kind === "treatment" ? "诊疗备注" : "康复备注"} ·{" "}
               {noteTarget.item.painAreaLabel}
             </p>
@@ -391,11 +511,14 @@ export default function InjuryPage() {
                 onClick={() => void handleNoteSave()}
                 className="flex-1 bg-black py-2 text-sm text-white"
               >
-                保存
+                {editingNoteId ? "保存修改" : "保存"}
               </button>
               <button
                 type="button"
-                onClick={() => setNoteTarget(null)}
+                onClick={() => {
+                  setNoteTarget(null);
+                  setEditingNoteId(null);
+                }}
                 className="flex-1 border py-2 text-sm"
               >
                 取消

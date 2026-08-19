@@ -41,7 +41,7 @@ import {
   type PainExerciseRelationId,
 } from "@/lib/clinical/injuryKinds";
 import { SESSION_FEEDBACK_SCHEMA_VERSION } from "@/lib/sessionFeedback";
-import { parseDateOnly, formatDateOnly } from "@/lib/dateOnly";
+import { parseDateOnly, formatDateOnly, isTodayDateOnly, SAME_DAY_MUTATION_ERROR } from "@/lib/dateOnly";
 import {
   LOAD_TAG_COACH_HINT,
   LOAD_TAG_LABEL,
@@ -59,6 +59,17 @@ import type {
 export type ActionOk<T extends object = object> = { success: true } & T;
 export type ActionErr = { success: false; error: string };
 export type ActionResult<T extends object = object> = ActionOk<T> | ActionErr;
+
+// 推导步骤：云端改删只认记录 date 的日历日；与 getTodayDateStr 同一 UTC 日
+function rejectIfNotToday(dateStr: string): ActionErr | null {
+  if (typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return { success: false, error: "date 须为 YYYY-MM-DD" };
+  }
+  if (!isTodayDateOnly(dateStr)) {
+    return { success: false, error: SAME_DAY_MUTATION_ERROR };
+  }
+  return null;
+}
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
@@ -507,6 +518,35 @@ export async function saveReadinessAssessment(
   }
 }
 
+export async function deleteReadinessAssessment(payload: {
+  playerId: string;
+  date: string;
+}): Promise<ActionResult> {
+  try {
+    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+    const dayErr = rejectIfNotToday(payload.date);
+    if (dayErr) return dayErr;
+
+    const existing = await prisma.readinessCheck.findUnique({
+      where: {
+        playerId_date: {
+          playerId: payload.playerId,
+          date: parseDateOnly(payload.date),
+        },
+      },
+    });
+    if (!existing) return { success: false, error: "没有今日评估记录" };
+
+    await prisma.readinessCheck.delete({ where: { id: existing.id } });
+    return { success: true };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
 export async function getReadinessHistory(
   playerId: string
 ): Promise<ActionResult<{ history: ReadinessHistoryEntry[] }>> {
@@ -755,6 +795,201 @@ export async function markInjuryRecovered(payload: {
   }
 }
 
+export type UpdateInjuryCasePayload = {
+  playerId: string;
+  caseId: string;
+  painArea: PainArea;
+  locationHint?: string;
+  injuryKind: InjuryKind;
+};
+
+export async function updateInjuryCase(
+  payload: UpdateInjuryCasePayload
+): Promise<ActionResult<{ injuryCase: InjuryCaseDto }>> {
+  try {
+    const existing = await prisma.injuryCase.findFirst({
+      where: { id: payload.caseId, playerId: payload.playerId },
+    });
+    if (!existing) return { success: false, error: "找不到该损伤记录" };
+    const dayErr = rejectIfNotToday(formatDateOnly(existing.startDate));
+    if (dayErr) return dayErr;
+    const painArea = asPainArea(payload.painArea);
+    if (!painArea) return { success: false, error: "painArea 无效" };
+    if (!isInjuryKind(payload.injuryKind)) {
+      return { success: false, error: "injuryKind 无效" };
+    }
+    const locationHint =
+      typeof payload.locationHint === "string"
+        ? payload.locationHint.trim().slice(0, 80)
+        : existing.locationHint;
+    const row = await prisma.injuryCase.update({
+      where: { id: existing.id },
+      data: { painArea, locationHint, injuryKind: payload.injuryKind },
+      include: caseInclude,
+    });
+    return { success: true, injuryCase: mapCase(row as CaseRow) };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export async function deleteInjuryCase(payload: {
+  playerId: string;
+  caseId: string;
+}): Promise<ActionResult> {
+  try {
+    const existing = await prisma.injuryCase.findFirst({
+      where: { id: payload.caseId, playerId: payload.playerId },
+    });
+    if (!existing) return { success: false, error: "找不到该损伤记录" };
+    const dayErr = rejectIfNotToday(formatDateOnly(existing.startDate));
+    if (dayErr) return dayErr;
+    await prisma.injuryCase.delete({ where: { id: existing.id } });
+    return { success: true };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export type UpdateInjuryPainLogPayload = {
+  playerId: string;
+  logId: string;
+  painScore: number;
+  painExerciseRelations: PainExerciseRelationId[];
+  note?: string | null;
+};
+
+export async function updateInjuryPainLog(
+  payload: UpdateInjuryPainLogPayload
+): Promise<ActionResult<{ injuryCase: InjuryCaseDto }>> {
+  try {
+    const painScore = clampScore0to10(payload.painScore);
+    if (painScore === null) return { success: false, error: "painScore 无效" };
+    const log = await prisma.injuryPainLog.findUnique({
+      where: { id: payload.logId },
+      include: { injuryCase: true },
+    });
+    if (!log || log.injuryCase.playerId !== payload.playerId) {
+      return { success: false, error: "找不到该疼痛记录" };
+    }
+    const dayErr = rejectIfNotToday(formatDateOnly(log.date));
+    if (dayErr) return dayErr;
+    await prisma.injuryPainLog.update({
+      where: { id: log.id },
+      data: {
+        painScore,
+        painExerciseRelations: (payload.painExerciseRelations ?? []).filter(
+          isPainExerciseRelation
+        ),
+        note: payload.note?.trim().slice(0, 200) || null,
+      },
+    });
+    const row = await prisma.injuryCase.findUnique({
+      where: { id: log.caseId },
+      include: caseInclude,
+    });
+    if (!row) return { success: false, error: "写入后读取失败" };
+    return { success: true, injuryCase: mapCase(row as CaseRow) };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export async function deleteInjuryPainLog(payload: {
+  playerId: string;
+  logId: string;
+}): Promise<ActionResult<{ injuryCase: InjuryCaseDto }>> {
+  try {
+    const log = await prisma.injuryPainLog.findUnique({
+      where: { id: payload.logId },
+      include: { injuryCase: true },
+    });
+    if (!log || log.injuryCase.playerId !== payload.playerId) {
+      return { success: false, error: "找不到该疼痛记录" };
+    }
+    const dayErr = rejectIfNotToday(formatDateOnly(log.date));
+    if (dayErr) return dayErr;
+    await prisma.injuryPainLog.delete({ where: { id: log.id } });
+    const row = await prisma.injuryCase.findUnique({
+      where: { id: log.caseId },
+      include: caseInclude,
+    });
+    if (!row) return { success: false, error: "删除后读取失败" };
+    return { success: true, injuryCase: mapCase(row as CaseRow) };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export type UpdateInjuryNotePayload = {
+  playerId: string;
+  noteId: string;
+  content: string;
+};
+
+export async function updateInjuryNote(
+  payload: UpdateInjuryNotePayload
+): Promise<ActionResult<{ injuryCase: InjuryCaseDto }>> {
+  try {
+    const content =
+      typeof payload.content === "string" ? payload.content.trim() : "";
+    if (!content) return { success: false, error: "备注不能为空" };
+    const note = await prisma.injuryNoteRecord.findUnique({
+      where: { id: payload.noteId },
+      include: { injuryCase: true },
+    });
+    if (!note || note.injuryCase.playerId !== payload.playerId) {
+      return { success: false, error: "找不到该备注" };
+    }
+    const dayErr = rejectIfNotToday(formatDateOnly(note.date));
+    if (dayErr) return dayErr;
+    await prisma.injuryNoteRecord.update({
+      where: { id: note.id },
+      data: { content: content.slice(0, 500) },
+    });
+    const row = await prisma.injuryCase.findUnique({
+      where: { id: note.caseId },
+      include: caseInclude,
+    });
+    if (!row) return { success: false, error: "写入后读取失败" };
+    return { success: true, injuryCase: mapCase(row as CaseRow) };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export async function deleteInjuryNote(payload: {
+  playerId: string;
+  noteId: string;
+}): Promise<ActionResult<{ injuryCase: InjuryCaseDto }>> {
+  try {
+    const note = await prisma.injuryNoteRecord.findUnique({
+      where: { id: payload.noteId },
+      include: { injuryCase: true },
+    });
+    if (!note || note.injuryCase.playerId !== payload.playerId) {
+      return { success: false, error: "找不到该备注" };
+    }
+    const dayErr = rejectIfNotToday(formatDateOnly(note.date));
+    if (dayErr) return dayErr;
+    await prisma.injuryNoteRecord.delete({ where: { id: note.id } });
+    const row = await prisma.injuryCase.findUnique({
+      where: { id: note.caseId },
+      include: caseInclude,
+    });
+    if (!row) return { success: false, error: "删除后读取失败" };
+    return { success: true, injuryCase: mapCase(row as CaseRow) };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
 export type SaveSessionFeedbackPayload = {
   playerId: string;
   date: string;
@@ -881,6 +1116,175 @@ export async function saveSessionFeedback(
       },
       view,
     };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+function mapSessionFeedbackSaved(row: {
+  id: string;
+  date: Date;
+  activityType: ActivityType;
+  sessionRpe: number;
+  durationMin: number;
+  sessionLoad: number;
+  note: string | null;
+}): SessionFeedbackSaved {
+  return {
+    id: row.id,
+    date: formatDateOnly(row.date),
+    activityType: row.activityType,
+    sessionRpe: row.sessionRpe,
+    durationMin: row.durationMin,
+    sessionLoad: row.sessionLoad,
+    note: row.note,
+  };
+}
+
+async function buildFeedbackViewForSaved(
+  playerId: string,
+  dateStr: string,
+  savedId: string
+): Promise<PostSaveFeedbackView | null> {
+  const date = parseDateOnly(dateStr);
+  const [allPosts, todayPre, activeCases] = await Promise.all([
+    prisma.sessionFeedback.findMany({
+      where: { playerId },
+      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+    }),
+    prisma.readinessCheck.findUnique({
+      where: { playerId_date: { playerId, date } },
+    }),
+    prisma.injuryCase.findMany({
+      where: { playerId, status: "active" },
+      select: { painArea: true },
+    }),
+  ]);
+  const postRows: PostSessionRow[] = allPosts.map((row) => ({
+    id: row.id,
+    date: formatDateOnly(row.date),
+    activityType: row.activityType,
+    sessionRpe: row.sessionRpe,
+    durationMin: row.durationMin,
+    sessionLoad: row.sessionLoad,
+    savedAt: row.createdAt.toISOString(),
+  }));
+  const savedPost = postRows.find((p) => p.id === savedId);
+  if (!savedPost) return null;
+  return buildPostSaveFeedback({
+    savedPost,
+    allPosts: postRows,
+    todaySessionCount: postRows.filter((p) => p.date === dateStr).length,
+    todayPhysicalBattery: todayPre?.physicalBattery ?? null,
+    activeInjuries: activeCases,
+  });
+}
+
+export async function getSessionFeedbacks(
+  playerId: string,
+  date: string
+): Promise<ActionResult<{ entries: SessionFeedbackSaved[] }>> {
+  try {
+    if (typeof playerId !== "string" || !playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return { success: false, error: "date 须为 YYYY-MM-DD" };
+    }
+    const rows = await prisma.sessionFeedback.findMany({
+      where: { playerId, date: parseDateOnly(date) },
+      orderBy: { createdAt: "asc" },
+    });
+    return { success: true, entries: rows.map(mapSessionFeedbackSaved) };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export async function updateSessionFeedback(
+  payload: SaveSessionFeedbackPayload & { id: string }
+): Promise<
+  ActionResult<{
+    entry: SessionFeedbackSaved;
+    view: PostSaveFeedbackView;
+  }>
+> {
+  try {
+    if (typeof payload.id !== "string" || !payload.id.trim()) {
+      return { success: false, error: "id 无效" };
+    }
+    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+    const dayErr = rejectIfNotToday(payload.date);
+    if (dayErr) return dayErr;
+    const sessionRpe = clampScore0to10(payload.sessionRpe);
+    if (sessionRpe === null || sessionRpe < 1) {
+      return { success: false, error: "sessionRpe 须为 1–10" };
+    }
+    if (
+      typeof payload.durationMin !== "number" ||
+      !Number.isFinite(payload.durationMin) ||
+      payload.durationMin < 1 ||
+      payload.durationMin > 360
+    ) {
+      return { success: false, error: "durationMin 须为 1–360" };
+    }
+    const existing = await prisma.sessionFeedback.findFirst({
+      where: { id: payload.id, playerId: payload.playerId },
+    });
+    if (!existing) return { success: false, error: "找不到该训后反馈" };
+    const existingDate = formatDateOnly(existing.date);
+    const existingDayErr = rejectIfNotToday(existingDate);
+    if (existingDayErr) return existingDayErr;
+
+    const activityType = isActivityType(payload.activityType)
+      ? payload.activityType
+      : "other";
+    const noteRaw = typeof payload.note === "string" ? payload.note.trim() : "";
+    const note = noteRaw ? noteRaw.slice(0, 200) : null;
+    const durationMin = Math.round(payload.durationMin);
+    const sessionLoad = computeSessionLoad(sessionRpe, durationMin);
+
+    const updated = await prisma.sessionFeedback.update({
+      where: { id: existing.id },
+      data: { activityType, sessionRpe, durationMin, sessionLoad, note },
+    });
+    const view = await buildFeedbackViewForSaved(
+      payload.playerId,
+      existingDate,
+      updated.id
+    );
+    if (!view) return { success: false, error: "写入后读取失败" };
+    return {
+      success: true,
+      entry: mapSessionFeedbackSaved(updated),
+      view,
+    };
+  } catch (error) {
+    console.error("数据库写入失败的完整原因:", error);
+    return { success: false, error: errorMessage(error) };
+  }
+}
+
+export async function deleteSessionFeedback(payload: {
+  playerId: string;
+  id: string;
+}): Promise<ActionResult> {
+  try {
+    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
+      return { success: false, error: "playerId 无效" };
+    }
+    const existing = await prisma.sessionFeedback.findFirst({
+      where: { id: payload.id, playerId: payload.playerId },
+    });
+    if (!existing) return { success: false, error: "找不到该训后反馈" };
+    const dayErr = rejectIfNotToday(formatDateOnly(existing.date));
+    if (dayErr) return dayErr;
+    await prisma.sessionFeedback.delete({ where: { id: existing.id } });
+    return { success: true };
   } catch (error) {
     console.error("数据库写入失败的完整原因:", error);
     return { success: false, error: errorMessage(error) };
