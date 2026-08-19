@@ -1,10 +1,27 @@
-// 综合测试日当场草稿：刷新后恢复 hits / 速度 / 排阵 / 测试项，归档后清空。
+// 综合测试日当场草稿：刷新后恢复 hits / 速度 / 技能表 / 排阵 / 测试项，归档后清空。
 
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { safeParseJSON } from "@/lib/safeParse";
-import type { HitRecord, SpeedRecord } from "@/lib/gameArchive";
+import {
+  emptySkillArchiveSlice,
+  isFlyCatchAttempt,
+  isHitRecord,
+  isSpeedRecord,
+  isStrikeJudgeCell,
+  isStrikeJudgeColumn,
+  isThrowPlay,
+  type FlyCatchAttempt,
+  type HitRecord,
+  type SkillArchiveSlice,
+  type SpeedRecord,
+  type StrikeJudgeCell,
+  type StrikeJudgeColumn,
+  type ThrowPlay,
+} from "@/lib/gameArchive";
 
-export const SESSION_DRAFT_SCHEMA_VERSION = 1;
+export const SESSION_DRAFT_SCHEMA_VERSION = 2;
+
+export const ROLE_ASSIGNMENT_ITEMS = ["投手", "一垒"] as const;
 
 export const DEFAULT_TEST_ITEMS = [
   "T座打击",
@@ -13,16 +30,37 @@ export const DEFAULT_TEST_ITEMS = [
   "好球判断",
   "6-3传球",
   "4-3传球",
+  "投手",
+  "一垒",
 ] as const;
+
+export type RoleAssignmentItem = (typeof ROLE_ASSIGNMENT_ITEMS)[number];
 
 export type Assignments = Record<string, string[]>;
 
-export interface SessionDraft {
+export interface SessionDraft extends SkillArchiveSlice {
   schemaVersion: number;
   hits: HitRecord[];
   speedRecords: SpeedRecord[];
   assignments: Assignments;
   testItems: string[];
+}
+
+export function isRoleAssignmentItem(item: string): boolean {
+  return (ROLE_ASSIGNMENT_ITEMS as readonly string[]).includes(item);
+}
+
+export function accordionTestItems(testItems: string[]): string[] {
+  return testItems.filter((item) => !isRoleAssignmentItem(item));
+}
+
+// 推导步骤：旧草稿缺角色项时补上，避免排阵里看不见投手/一垒
+export function ensureRoleAssignmentItems(testItems: string[]): string[] {
+  const next = [...testItems];
+  for (const role of ROLE_ASSIGNMENT_ITEMS) {
+    if (!next.includes(role)) next.push(role);
+  }
+  return next.length > 0 ? next : [...DEFAULT_TEST_ITEMS];
 }
 
 export function createEmptySessionDraft(
@@ -33,31 +71,14 @@ export function createEmptySessionDraft(
     hits: [],
     speedRecords: [],
     assignments: {},
-    testItems,
+    testItems: ensureRoleAssignmentItems(testItems),
+    ...emptySkillArchiveSlice(),
   };
 }
 
-function isHitRecord(value: unknown): value is HitRecord {
-  if (!value || typeof value !== "object") return false;
-  const hit = value as Record<string, unknown>;
-  return (
-    typeof hit.id === "string" &&
-    typeof hit.result === "string" &&
-    typeof hit.playerId === "string" &&
-    typeof hit.playerName === "string" &&
-    typeof hit.timestamp === "number"
-  );
-}
-
-function isSpeedRecord(value: unknown): value is SpeedRecord {
-  if (!value || typeof value !== "object") return false;
-  const row = value as Record<string, unknown>;
-  return (
-    typeof row.id === "string" &&
-    typeof row.playerId === "string" &&
-    typeof row.playerName === "string" &&
-    typeof row.timestamp === "number"
-  );
+function parseAssignments(value: unknown): Assignments {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Assignments;
 }
 
 // 推导步骤：优先读新草稿 → 否则把旧 softball_hits 迁入 → 写回新 key 并清除旧 key
@@ -75,28 +96,32 @@ export function loadSessionDraft(): SessionDraft {
       const speedRecords = Array.isArray(obj.speedRecords)
         ? obj.speedRecords.filter(isSpeedRecord)
         : [];
-      const assignments =
-        obj.assignments &&
-        typeof obj.assignments === "object" &&
-        !Array.isArray(obj.assignments)
-          ? (obj.assignments as Assignments)
-          : {};
-      const testItems =
+      const testItems = ensureRoleAssignmentItems(
         Array.isArray(obj.testItems) &&
-        obj.testItems.every((item) => typeof item === "string") &&
-        obj.testItems.length > 0
+          obj.testItems.every((item) => typeof item === "string") &&
+          obj.testItems.length > 0
           ? (obj.testItems as string[])
-          : [...DEFAULT_TEST_ITEMS];
+          : [...DEFAULT_TEST_ITEMS]
+      );
 
       return {
-        schemaVersion:
-          typeof obj.schemaVersion === "number"
-            ? obj.schemaVersion
-            : SESSION_DRAFT_SCHEMA_VERSION,
+        schemaVersion: SESSION_DRAFT_SCHEMA_VERSION,
         hits,
         speedRecords,
-        assignments,
+        assignments: parseAssignments(obj.assignments),
         testItems,
+        flyCatchAttempts: Array.isArray(obj.flyCatchAttempts)
+          ? obj.flyCatchAttempts.filter(isFlyCatchAttempt)
+          : [],
+        strikeJudgeColumns: Array.isArray(obj.strikeJudgeColumns)
+          ? obj.strikeJudgeColumns.filter(isStrikeJudgeColumn)
+          : [],
+        strikeJudgeCells: Array.isArray(obj.strikeJudgeCells)
+          ? obj.strikeJudgeCells.filter(isStrikeJudgeCell)
+          : [],
+        throwPlays: Array.isArray(obj.throwPlays)
+          ? obj.throwPlays.filter(isThrowPlay)
+          : [],
       };
     }
   }
@@ -124,6 +149,10 @@ export function saveSessionDraft(draft: SessionDraft): void {
     speedRecords: draft.speedRecords,
     assignments: draft.assignments,
     testItems: draft.testItems,
+    flyCatchAttempts: draft.flyCatchAttempts,
+    strikeJudgeColumns: draft.strikeJudgeColumns,
+    strikeJudgeCells: draft.strikeJudgeCells,
+    throwPlays: draft.throwPlays,
   };
   localStorage.setItem(STORAGE_KEYS.sessionDraft, JSON.stringify(payload));
   // 写入新草稿后不再保留旧 hits key，避免双源互相覆盖
@@ -134,3 +163,10 @@ export function clearSessionDraft(): void {
   localStorage.removeItem(STORAGE_KEYS.sessionDraft);
   localStorage.removeItem(STORAGE_KEYS.hitsLegacy);
 }
+
+export type {
+  FlyCatchAttempt,
+  StrikeJudgeCell,
+  StrikeJudgeColumn,
+  ThrowPlay,
+};

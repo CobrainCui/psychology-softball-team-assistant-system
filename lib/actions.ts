@@ -2,63 +2,58 @@
 
 import { prisma } from "@/lib/db";
 import {
-  GAME_ARCHIVE_SCHEMA_VERSION,
-  type HitQuality,
-  type HitRecord,
-  type HitResult,
-  type PitchType,
-  type SpeedRecord,
-} from "@/lib/gameArchive";
-import {
   normalizePlayerRole,
   type Gender,
   type Player,
   type PlayerRole,
 } from "@/lib/players";
-import type { Assignments } from "@/lib/sessionDraft";
 import {
-  getTodayDateStr,
-  type ProbeFeedback,
-  type ReadinessHistoryEntry,
-  type SleepQuality,
-} from "@/lib/readinessHistory";
-import {
-  PAIN_AREA_LABEL,
-  type PainArea,
-} from "@/lib/clinical/painAreas";
-import {
-  deriveAvailabilityStatus,
-  availabilityLabel,
-  AVAILABILITY_LOOKBACK_DAYS,
-  type AvailabilityStatus,
-} from "@/lib/clinical/availabilityStatus";
-import {
-  loadBandFromScore,
-  loadBandTone,
-  type LoadBandId,
-} from "@/lib/clinical/readinessScore";
-import { type ReadinessTier } from "@/lib/clinical/readinessTier";
-import {
-  type CycleConfidence,
-  type CyclePhaseCode,
-} from "@/lib/clinical/cyclePhase";
+  collectSessionArchivePlayerIds,
+  normalizeSessionArchivePayload,
+  sessionArchiveHasContent,
+  type SessionArchivePayload,
+} from "@/lib/testDay/archiveValidation";
+import { buildTestSessionCreateInput } from "@/lib/testDay/sessionArchiveWrite";
 import { resolveCycleLength } from "@/lib/clinical/cycleStats";
-import {
-  LOAD_TAG_COACH_HINT,
-  LOAD_TAG_LABEL,
-  type PhysiologicalLoadTag,
-} from "@/lib/clinical/physiologicalLoad";
-import {
-  INJURY_LOG_SCHEMA_VERSION,
-  type InjuryLogEntry,
-} from "@/lib/injuryLog";
-import { SESSION_FEEDBACK_SCHEMA_VERSION } from "@/lib/sessionFeedback";
 import type {
-  CycleEnergyLevel,
-  CycleMoodLevel,
   CycleProfileDto,
   CycleSharingLevel,
 } from "@/lib/cycleTypes";
+import { parseDateOnly, formatDateOnly } from "@/lib/dateOnly";
+import {
+  getCoachDaySummary,
+  getInjuryCases,
+  getPlayerProfileData,
+  getReadinessHistory,
+  saveReadinessAssessment,
+  saveSessionFeedback,
+  createInjuryCase,
+  addInjuryPainLog,
+  addInjuryNote,
+  markInjuryRecovered,
+} from "@/lib/statusActions";
+
+export {
+  getCoachDaySummary,
+  getInjuryCases,
+  getPlayerProfileData,
+  getReadinessHistory,
+  saveReadinessAssessment,
+  saveSessionFeedback,
+  createInjuryCase,
+  addInjuryPainLog,
+  addInjuryNote,
+  markInjuryRecovered,
+};
+export type {
+  CoachDaySummary,
+  CoachPlotPoint,
+  CoachSessionFeedbackRow,
+  InjuryCaseDto,
+  ProfileLatestStatus,
+  SaveReadinessPayload,
+  SaveSessionFeedbackPayload,
+} from "@/lib/statusActions";
 
 export type {
   CycleEnergyLevel,
@@ -152,7 +147,6 @@ export async function loginOrRegister(
     });
 
     if (existing) {
-      // 登录页所选角色/性别写回云端，避免一直停在旧 role 导致教练入口与摘要缺失
       const updated = await prisma.player.update({
         where: { id: existing.id },
         data: {
@@ -195,112 +189,28 @@ export async function loginOrRegister(
   }
 }
 
-export type SaveTestSessionPayload = {
-  hits: HitRecord[];
-  speedRecords: SpeedRecord[];
-  assignments?: Assignments;
-  testItems?: string[];
-};
+export type SaveTestSessionPayload = SessionArchivePayload;
 
 export type SaveTestSessionResult =
   | { success: true; id: string; gameId: number; date: string }
   | { success: false; error: string };
 
-// 大联盟弹道字典：仅允许以下 result（拒绝旧版 1B/2B/3B/HR/OUT）
-const ALLOWED_HIT_RESULTS = ["LD", "FB", "GB", "PU", "MISS"] as const;
-const HIT_RESULTS = new Set<string>(ALLOWED_HIT_RESULTS);
-const PITCH_TYPES = new Set<string>(["FB", "CB", "SL", "CH", "OT"]);
-const HIT_QUALITIES = new Set<string>(["Hard", "Medium", "Soft"]);
-
-function asHitResult(value: unknown): HitResult | null {
-  return typeof value === "string" && HIT_RESULTS.has(value)
-    ? (value as HitResult)
-    : null;
-}
-
-function asPitchType(value: unknown): PitchType | null {
-  return typeof value === "string" && PITCH_TYPES.has(value)
-    ? (value as PitchType)
-    : null;
-}
-
-function asHitQuality(value: unknown): HitQuality | null {
-  return typeof value === "string" && HIT_QUALITIES.has(value)
-    ? (value as HitQuality)
-    : null;
-}
-
-function toFloatOrNull(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() !== "") {
-    const n = Number(value);
-    if (Number.isFinite(n)) return n;
-  }
-  return null;
-}
-
-// 推导步骤：逐字段手写映射（禁止 ...spread）→ 剔除 playerName/timestamp/id
-// → connect Team/Player → 嵌套 create；失败把 error.message 回传前端
+// 推导步骤：校验非空 → 校验 playerId → buildTestSessionCreateInput → create
 export async function saveTestSession(
   payload: SaveTestSessionPayload
 ): Promise<SaveTestSessionResult> {
   try {
-    const hitsRaw = Array.isArray(payload.hits) ? payload.hits : [];
-    const speedRaw = Array.isArray(payload.speedRecords)
-      ? payload.speedRecords
-      : [];
+    const data = normalizeSessionArchivePayload(payload);
 
-    if (hitsRaw.length === 0 && speedRaw.length === 0) {
+    if (!sessionArchiveHasContent(data)) {
       return { success: false, error: "归档内容为空" };
     }
 
     const team = await getOrCreateDefaultTeam();
     const archivedAt = new Date();
+    const prismaData = buildTestSessionCreateInput(payload, team.id, archivedAt);
 
-    // 仅 Schema 存在的字段；x/y 无效则为 null（禁止 NaN）
-    const hitCreates = hitsRaw.map((hit, index) => {
-      if (typeof hit.playerId !== "string" || !hit.playerId) {
-        throw new Error(`第 ${index + 1} 条打点缺少 playerId`);
-      }
-      const result = asHitResult(hit.result);
-      if (!result) {
-        throw new Error(
-          `第 ${index + 1} 条打点 result 无效: ${String(hit.result)}`
-        );
-      }
-      return {
-        player: { connect: { id: hit.playerId } },
-        result,
-        pitchType: asPitchType(hit.pitchType),
-        hitQuality: asHitQuality(hit.hitQuality),
-        x: toFloatOrNull(hit.x),
-        y: toFloatOrNull(hit.y),
-        // Schema 要求 recordedAt；用服务端时间，不吃前端 timestamp
-        recordedAt: archivedAt,
-      };
-    });
-
-    // Schema: firstBaseSeconds / secondBaseSeconds / customSeconds（无 toFirst 等别名）
-    const speedCreates = speedRaw.map((row, index) => {
-      if (typeof row.playerId !== "string" || !row.playerId) {
-        throw new Error(`第 ${index + 1} 条测速缺少 playerId`);
-      }
-      return {
-        player: { connect: { id: row.playerId } },
-        firstBaseSeconds: toFloatOrNull(row.firstBaseSeconds),
-        secondBaseSeconds: toFloatOrNull(row.secondBaseSeconds),
-        customSeconds: toFloatOrNull(row.customSeconds),
-        recordedAt: archivedAt,
-      };
-    });
-
-    const playerIds = [
-      ...new Set([
-        ...hitsRaw.map((h) => h.playerId),
-        ...speedRaw.map((s) => s.playerId),
-      ]),
-    ].filter((id): id is string => typeof id === "string" && id.length > 0);
-
+    const playerIds = collectSessionArchivePlayerIds(data);
     if (playerIds.length === 0) {
       return { success: false, error: "缺少有效的云端 playerId" };
     }
@@ -318,16 +228,6 @@ export async function saveTestSession(
       };
     }
 
-    const prismaData = {
-      schemaVersion: GAME_ARCHIVE_SCHEMA_VERSION,
-      archivedAt,
-      team: { connect: { id: team.id } },
-      hits: { create: hitCreates },
-      speedRecords: { create: speedCreates },
-    };
-
-    console.log("即将送入 Prisma 的数据:", JSON.stringify(prismaData, null, 2));
-
     const session = await prisma.testSession.create({
       data: prismaData,
       select: { id: true, archivedAt: true },
@@ -341,152 +241,8 @@ export async function saveTestSession(
     };
   } catch (error) {
     console.error("数据库写入失败的完整原因:", error);
-    // 完整 error.message 回传前端（经 { success: false, error }，避免 throw 被边界吞掉）
     return { success: false, error: errorMessage(error) };
   }
-}
-
-// 推导步骤：按 playerId 拉 Hit / SpeedRecord / InjuryLog / Readiness / Availability
-export async function getPlayerProfileData(
-  playerId: string
-): Promise<
-  ActionResult<{
-    hits: HitRecord[];
-    speedRecords: SpeedRecord[];
-    sessionCount: number;
-    injuryLogs: InjuryLogEntry[];
-    latestReadiness: number | null;
-    availabilityStatus: AvailabilityStatus;
-    availabilityLabel: string;
-    availabilityPainLabel: string | null;
-  }>
-> {
-  try {
-    if (typeof playerId !== "string" || !playerId.trim()) {
-      return { success: false, error: "playerId 无效" };
-    }
-
-    const player = await prisma.player.findUnique({
-      where: { id: playerId },
-      select: { id: true, name: true },
-    });
-    if (!player) {
-      return { success: false, error: "云端无此队员" };
-    }
-
-    const [hitRows, speedRows, injuryRows, latestCheck, availToday] =
-      await Promise.all([
-      prisma.hit.findMany({
-        where: { playerId: player.id },
-        orderBy: { recordedAt: "asc" },
-      }),
-      prisma.speedRecord.findMany({
-        where: { playerId: player.id },
-        orderBy: { recordedAt: "asc" },
-      }),
-      prisma.injuryLog.findMany({
-        where: { playerId: player.id },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-      }),
-      prisma.readinessCheck.findFirst({
-        where: { playerId: player.id },
-        orderBy: { date: "desc" },
-        select: { readinessScore: true },
-      }),
-      prisma.availabilityCheck.findFirst({
-        where: { playerId: player.id },
-        orderBy: { date: "desc" },
-      }),
-    ]);
-
-    const availStatus = (availToday?.status ?? "full") as AvailabilityStatus;
-
-    const hits: HitRecord[] = hitRows.map((hit) => ({
-      id: hit.id,
-      x: hit.x ?? undefined,
-      y: hit.y ?? undefined,
-      result: hit.result,
-      playerId: hit.playerId,
-      playerName: player.name,
-      pitchType: hit.pitchType ?? undefined,
-      hitQuality: hit.hitQuality ?? undefined,
-      timestamp: hit.recordedAt.getTime(),
-    }));
-
-    const speedRecords: SpeedRecord[] = speedRows.map((row) => ({
-      id: row.id,
-      playerId: row.playerId,
-      playerName: player.name,
-      firstBaseSeconds: row.firstBaseSeconds,
-      secondBaseSeconds: row.secondBaseSeconds,
-      customSeconds: row.customSeconds,
-      timestamp: row.recordedAt.getTime(),
-    }));
-
-    const sessionCount = new Set([
-      ...hitRows.map((h) => h.sessionId),
-      ...speedRows.map((s) => s.sessionId),
-    ]).size;
-
-    const injuryLogs: InjuryLogEntry[] = injuryRows.map((row) => ({
-      schemaVersion: row.schemaVersion,
-      id: row.id,
-      playerId: row.playerId,
-      playerName: player.name,
-      painArea: row.painArea,
-      painAreaLabel: PAIN_AREA_LABEL[row.painArea],
-      painScore: row.painScore,
-      symptom: row.symptom,
-      timestamp: row.createdAt.getTime(),
-    }));
-
-    return {
-      success: true,
-      hits,
-      speedRecords,
-      sessionCount,
-      injuryLogs,
-      latestReadiness: latestCheck?.readinessScore ?? null,
-      availabilityStatus: availStatus,
-      availabilityLabel: availabilityLabel(availStatus),
-      availabilityPainLabel: availToday?.painArea
-        ? PAIN_AREA_LABEL[availToday.painArea]
-        : null,
-    };
-  } catch (error) {
-    console.error("数据库写入失败的完整原因:", error);
-    return { success: false, error: errorMessage(error) };
-  }
-}
-
-const PAIN_AREAS = new Set<string>([
-  "shoulder",
-  "elbow",
-  "lumbar",
-  "knee",
-  "ankle",
-  "wrist",
-]);
-const PROBE_FEEDBACKS = new Set<string>(["A", "B", "C"]);
-const SLEEP_QUALITIES = new Set<string>(["good", "normal", "bad"]);
-
-function asPainArea(value: unknown): PainArea | null {
-  return typeof value === "string" && PAIN_AREAS.has(value)
-    ? (value as PainArea)
-    : null;
-}
-
-function asProbeFeedback(value: unknown): ProbeFeedback | null {
-  return typeof value === "string" && PROBE_FEEDBACKS.has(value)
-    ? (value as ProbeFeedback)
-    : null;
-}
-
-function asSleepQuality(value: unknown): SleepQuality | null {
-  return typeof value === "string" && SLEEP_QUALITIES.has(value)
-    ? (value as SleepQuality)
-    : null;
 }
 
 function clampScore0to10(value: unknown): number | null {
@@ -494,63 +250,10 @@ function clampScore0to10(value: unknown): number | null {
   return Math.max(0, Math.min(10, Math.round(value)));
 }
 
-function parseDateOnly(dateStr: string): Date {
-  // 正午 UTC，避免时区把 YYYY-MM-DD 推到前一天
-  return new Date(`${dateStr}T12:00:00.000Z`);
-}
-
-function formatDateOnly(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-export type SaveReadinessPayload = {
-  playerId: string;
-  date: string;
-  readinessScore: number;
-  hasNewInjury: boolean;
-  injuryPart: PainArea | null;
-  injuryScore: number;
-  probeFeedback: ProbeFeedback | null;
-  sleepQuality?: string;
-  stressScore?: number;
-  fatigueScore?: number;
-  sorenessScore?: number;
-  /** 生理周期快照（可选） */
-  cycleDay?: number | null;
-  cyclePhaseCode?: CyclePhaseCode | null;
-  cycleConfidence?: CycleConfidence | null;
-  physiologicalLoadTag?: PhysiologicalLoadTag | null;
-  crampsScore?: number | null;
-  cycleEnergy?: CycleEnergyLevel | null;
-  cycleMood?: CycleMoodLevel | null;
-  cycleIrregularFlag?: boolean;
-};
-
 const CYCLE_SHARING_LEVELS = new Set<CycleSharingLevel>([
   "none",
   "load_only",
   "phase_label",
-]);
-const CYCLE_ENERGY_LEVELS = new Set<CycleEnergyLevel>(["low", "mid", "high"]);
-const CYCLE_MOOD_LEVELS = new Set<CycleMoodLevel>([
-  "steady",
-  "irritable",
-  "low",
-]);
-const CYCLE_PHASE_CODES = new Set<CyclePhaseCode>([
-  "menstrual",
-  "follicular",
-  "ovulation",
-  "luteal",
-  "late_luteal",
-]);
-const CYCLE_CONFIDENCES = new Set<CycleConfidence>(["low", "medium", "high"]);
-const LOAD_TAGS = new Set<PhysiologicalLoadTag>([
-  "recover_high",
-  "acl_caution",
-  "maintain",
-  "peak_ok",
-  "monitor_health",
 ]);
 
 function asCycleSharingLevel(value: unknown): CycleSharingLevel | null {
@@ -558,823 +261,6 @@ function asCycleSharingLevel(value: unknown): CycleSharingLevel | null {
     CYCLE_SHARING_LEVELS.has(value as CycleSharingLevel)
     ? (value as CycleSharingLevel)
     : null;
-}
-
-function asCycleEnergy(value: unknown): CycleEnergyLevel | null {
-  return typeof value === "string" &&
-    CYCLE_ENERGY_LEVELS.has(value as CycleEnergyLevel)
-    ? (value as CycleEnergyLevel)
-    : null;
-}
-
-function asCycleMood(value: unknown): CycleMoodLevel | null {
-  return typeof value === "string" &&
-    CYCLE_MOOD_LEVELS.has(value as CycleMoodLevel)
-    ? (value as CycleMoodLevel)
-    : null;
-}
-
-function asCyclePhaseCode(value: unknown): CyclePhaseCode | null {
-  return typeof value === "string" &&
-    CYCLE_PHASE_CODES.has(value as CyclePhaseCode)
-    ? (value as CyclePhaseCode)
-    : null;
-}
-
-function asCycleConfidence(value: unknown): CycleConfidence | null {
-  return typeof value === "string" &&
-    CYCLE_CONFIDENCES.has(value as CycleConfidence)
-    ? (value as CycleConfidence)
-    : null;
-}
-
-function asLoadTag(value: unknown): PhysiologicalLoadTag | null {
-  return typeof value === "string" &&
-    LOAD_TAGS.has(value as PhysiologicalLoadTag)
-    ? (value as PhysiologicalLoadTag)
-    : null;
-}
-
-export type SaveInjuryLogPayload = {
-  playerId: string;
-  painArea: PainArea;
-  painScore: number;
-  symptom: string;
-  probeFeedback?: ProbeFeedback | null;
-  cleared?: boolean;
-  date?: string;
-};
-
-// 推导步骤：校验 playerId/date/枚举 → upsert ReadinessCheck（含 Wellness 原值）
-export async function saveReadinessAssessment(
-  payload: SaveReadinessPayload
-): Promise<ActionResult> {
-  try {
-    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
-      return { success: false, error: "playerId 无效" };
-    }
-    if (
-      typeof payload.date !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(payload.date)
-    ) {
-      return { success: false, error: "date 须为 YYYY-MM-DD" };
-    }
-    if (
-      typeof payload.readinessScore !== "number" ||
-      !Number.isFinite(payload.readinessScore)
-    ) {
-      return { success: false, error: "readinessScore 无效" };
-    }
-
-    const player = await prisma.player.findUnique({
-      where: { id: payload.playerId },
-      select: { id: true },
-    });
-    if (!player) {
-      return { success: false, error: "云端无此队员" };
-    }
-
-    const sleepQuality = asSleepQuality(payload.sleepQuality);
-    const stressScore = clampScore0to10(payload.stressScore);
-    const fatigueScore = clampScore0to10(payload.fatigueScore);
-    const sorenessScore = clampScore0to10(payload.sorenessScore);
-    const crampsScore = clampScore0to10(payload.crampsScore ?? undefined);
-    const cycleEnergy = asCycleEnergy(payload.cycleEnergy);
-    const cycleMood = asCycleMood(payload.cycleMood);
-    const cyclePhaseCode = asCyclePhaseCode(payload.cyclePhaseCode);
-    const cycleConfidence = asCycleConfidence(payload.cycleConfidence);
-    const physiologicalLoadTag = asLoadTag(payload.physiologicalLoadTag);
-    const cycleDay =
-      typeof payload.cycleDay === "number" && Number.isFinite(payload.cycleDay)
-        ? Math.round(payload.cycleDay)
-        : null;
-
-    const date = parseDateOnly(payload.date);
-    // 评估页已解耦伤病：写库时强制清空伤病字段，保留列仅兼容旧行
-    const data = {
-      readinessScore: Math.round(payload.readinessScore),
-      hasNewInjury: false,
-      injuryPart: null as PainArea | null,
-      injuryScore: 0,
-      probeFeedback: null as ProbeFeedback | null,
-      sleepQuality,
-      stressScore,
-      fatigueScore,
-      sorenessScore,
-      cycleDay,
-      cyclePhaseCode,
-      cycleConfidence,
-      physiologicalLoadTag,
-      crampsScore,
-      cycleEnergy,
-      cycleMood,
-      cycleIrregularFlag: Boolean(payload.cycleIrregularFlag),
-    };
-
-    console.log(
-      "即将送入 Prisma 的数据:",
-      JSON.stringify({ playerId: player.id, date: payload.date, ...data }, null, 2)
-    );
-
-    await prisma.readinessCheck.upsert({
-      where: {
-        playerId_date: {
-          playerId: player.id,
-          date,
-        },
-      },
-      create: {
-        player: { connect: { id: player.id } },
-        date,
-        readinessScore: data.readinessScore,
-        hasNewInjury: data.hasNewInjury,
-        injuryPart: data.injuryPart,
-        injuryScore: data.injuryScore,
-        probeFeedback: data.probeFeedback,
-        sleepQuality: data.sleepQuality,
-        stressScore: data.stressScore,
-        fatigueScore: data.fatigueScore,
-        sorenessScore: data.sorenessScore,
-        cycleDay: data.cycleDay,
-        cyclePhaseCode: data.cyclePhaseCode,
-        cycleConfidence: data.cycleConfidence,
-        physiologicalLoadTag: data.physiologicalLoadTag,
-        crampsScore: data.crampsScore,
-        cycleEnergy: data.cycleEnergy,
-        cycleMood: data.cycleMood,
-        cycleIrregularFlag: data.cycleIrregularFlag,
-      },
-      update: {
-        readinessScore: data.readinessScore,
-        hasNewInjury: data.hasNewInjury,
-        injuryPart: data.injuryPart,
-        injuryScore: data.injuryScore,
-        probeFeedback: data.probeFeedback,
-        sleepQuality: data.sleepQuality,
-        stressScore: data.stressScore,
-        fatigueScore: data.fatigueScore,
-        sorenessScore: data.sorenessScore,
-        cycleDay: data.cycleDay,
-        cyclePhaseCode: data.cyclePhaseCode,
-        cycleConfidence: data.cycleConfidence,
-        physiologicalLoadTag: data.physiologicalLoadTag,
-        crampsScore: data.crampsScore,
-        cycleEnergy: data.cycleEnergy,
-        cycleMood: data.cycleMood,
-        cycleIrregularFlag: data.cycleIrregularFlag,
-      },
-    });
-
-    return { success: true };
-  } catch (error) {
-    console.error("数据库写入失败的完整原因:", error);
-    return { success: false, error: errorMessage(error) };
-  }
-}
-
-// 推导步骤：按 playerId 倒序拉 ReadinessCheck → 映射为前端 ReadinessHistoryEntry
-export async function getReadinessHistory(
-  playerId: string
-): Promise<ActionResult<{ history: ReadinessHistoryEntry[] }>> {
-  try {
-    if (typeof playerId !== "string" || !playerId.trim()) {
-      return { success: false, error: "playerId 无效" };
-    }
-
-    const rows = await prisma.readinessCheck.findMany({
-      where: { playerId },
-      orderBy: { date: "desc" },
-    });
-
-    const history: ReadinessHistoryEntry[] = rows.map((row) => ({
-      playerId: row.playerId,
-      date: formatDateOnly(row.date),
-      readinessScore: row.readinessScore,
-      hasNewInjury: row.hasNewInjury,
-      injuryPart: row.injuryPart,
-      injuryScore: row.injuryScore,
-      probeFeedback: row.probeFeedback,
-      sleepQuality: row.sleepQuality,
-      stressScore: row.stressScore,
-      fatigueScore: row.fatigueScore,
-      sorenessScore: row.sorenessScore,
-    }));
-
-    return { success: true, history };
-  } catch (error) {
-    console.error("数据库写入失败的完整原因:", error);
-    return { success: false, error: errorMessage(error) };
-  }
-}
-
-// 推导步骤：校验 → create InjuryLog → upsert 当日 AvailabilityCheck
-export async function saveInjuryLog(
-  payload: SaveInjuryLogPayload
-): Promise<
-  ActionResult<{ entry: InjuryLogEntry; availability: AvailabilityStatus }>
-> {
-  try {
-    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
-      return { success: false, error: "playerId 无效" };
-    }
-    const painArea = asPainArea(payload.painArea);
-    if (!painArea) {
-      return { success: false, error: "painArea 无效" };
-    }
-    if (
-      typeof payload.painScore !== "number" ||
-      !Number.isFinite(payload.painScore)
-    ) {
-      return { success: false, error: "painScore 无效" };
-    }
-    if (typeof payload.symptom !== "string" || !payload.symptom.trim()) {
-      return { success: false, error: "symptom 无效" };
-    }
-
-    const player = await prisma.player.findUnique({
-      where: { id: payload.playerId },
-      select: { id: true, name: true },
-    });
-    if (!player) {
-      return { success: false, error: "云端无此队员" };
-    }
-
-    const painScore = Math.max(0, Math.min(10, Math.round(payload.painScore)));
-    const symptom = payload.symptom.trim();
-    const probeFeedback = asProbeFeedback(payload.probeFeedback ?? null);
-    const cleared = Boolean(payload.cleared) || probeFeedback === "A";
-    const status = deriveAvailabilityStatus({
-      painScore,
-      probeFeedback,
-      cleared,
-    });
-    const dateStr =
-      typeof payload.date === "string" &&
-      /^\d{4}-\d{2}-\d{2}$/.test(payload.date)
-        ? payload.date
-        : getTodayDateStr();
-    const date = parseDateOnly(dateStr);
-
-    console.log(
-      "即将送入 Prisma 的数据:",
-      JSON.stringify(
-        {
-          playerId: player.id,
-          painArea,
-          painScore,
-          symptom,
-          status,
-          probeFeedback,
-        },
-        null,
-        2
-      )
-    );
-
-    const row = await prisma.injuryLog.create({
-      data: {
-        player: { connect: { id: player.id } },
-        schemaVersion: INJURY_LOG_SCHEMA_VERSION,
-        painArea,
-        painScore,
-        symptom,
-      },
-    });
-
-    await prisma.availabilityCheck.upsert({
-      where: {
-        playerId_date: { playerId: player.id, date },
-      },
-      create: {
-        player: { connect: { id: player.id } },
-        date,
-        schemaVersion: 1,
-        status,
-        painArea: status === "full" ? null : painArea,
-        painScore: status === "full" ? 0 : painScore,
-        symptom: status === "full" ? null : symptom,
-        probeFeedback,
-      },
-      update: {
-        status,
-        painArea: status === "full" ? null : painArea,
-        painScore: status === "full" ? 0 : painScore,
-        symptom: status === "full" ? null : symptom,
-        probeFeedback,
-      },
-    });
-
-    const entry: InjuryLogEntry = {
-      schemaVersion: row.schemaVersion,
-      id: row.id,
-      playerId: row.playerId,
-      playerName: player.name,
-      painArea: row.painArea,
-      painAreaLabel: PAIN_AREA_LABEL[row.painArea],
-      painScore: row.painScore,
-      symptom: row.symptom,
-      timestamp: row.createdAt.getTime(),
-    };
-
-    return { success: true, entry, availability: status };
-  } catch (error) {
-    console.error("数据库写入失败的完整原因:", error);
-    return { success: false, error: errorMessage(error) };
-  }
-}
-
-// 推导步骤：按 playerId 倒序拉 InjuryLog → 映射为 InjuryLogEntry
-export async function getInjuryLogs(
-  playerId: string
-): Promise<ActionResult<{ logs: InjuryLogEntry[] }>> {
-  try {
-    if (typeof playerId !== "string" || !playerId.trim()) {
-      return { success: false, error: "playerId 无效" };
-    }
-
-    const player = await prisma.player.findUnique({
-      where: { id: playerId },
-      select: { id: true, name: true },
-    });
-    if (!player) {
-      return { success: false, error: "云端无此队员" };
-    }
-
-    const rows = await prisma.injuryLog.findMany({
-      where: { playerId: player.id },
-      orderBy: { createdAt: "desc" },
-    });
-
-    const logs: InjuryLogEntry[] = rows.map((row) => ({
-      schemaVersion: row.schemaVersion,
-      id: row.id,
-      playerId: row.playerId,
-      playerName: player.name,
-      painArea: row.painArea,
-      painAreaLabel: PAIN_AREA_LABEL[row.painArea],
-      painScore: row.painScore,
-      symptom: row.symptom,
-      timestamp: row.createdAt.getTime(),
-    }));
-
-    return { success: true, logs };
-  } catch (error) {
-    console.error("数据库写入失败的完整原因:", error);
-    return { success: false, error: errorMessage(error) };
-  }
-}
-
-export type AvailabilitySnapshot = {
-  status: AvailabilityStatus;
-  statusLabel: string;
-  date: string | null;
-  painArea: PainArea | null;
-  painAreaLabel: string | null;
-  painScore: number;
-  probeFeedback: ProbeFeedback | null;
-  needsProbe: boolean;
-};
-
-// 推导步骤：当日 Availability → 否则近 LOOKBACK 天内非 full 最新一条 → 默认 full
-export async function getPlayerAvailability(
-  playerId: string,
-  dateStr?: string
-): Promise<ActionResult<{ availability: AvailabilitySnapshot }>> {
-  try {
-    if (typeof playerId !== "string" || !playerId.trim()) {
-      return { success: false, error: "playerId 无效" };
-    }
-    const date =
-      typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
-        ? dateStr
-        : getTodayDateStr();
-
-    const today = await prisma.availabilityCheck.findUnique({
-      where: {
-        playerId_date: {
-          playerId,
-          date: parseDateOnly(date),
-        },
-      },
-    });
-
-    let row = today;
-    if (!row) {
-      const cutoff = new Date(parseDateOnly(date));
-      cutoff.setUTCDate(cutoff.getUTCDate() - AVAILABILITY_LOOKBACK_DAYS);
-      row = await prisma.availabilityCheck.findFirst({
-        where: {
-          playerId,
-          date: { gte: cutoff, lte: parseDateOnly(date) },
-          status: { not: "full" },
-        },
-        orderBy: { date: "desc" },
-      });
-    }
-
-    if (!row) {
-      return {
-        success: true,
-        availability: {
-          status: "full",
-          statusLabel: availabilityLabel("full"),
-          date: null,
-          painArea: null,
-          painAreaLabel: null,
-          painScore: 0,
-          probeFeedback: null,
-          needsProbe: false,
-        },
-      };
-    }
-
-    const status = row.status as AvailabilityStatus;
-    return {
-      success: true,
-      availability: {
-        status,
-        statusLabel: availabilityLabel(status),
-        date: formatDateOnly(row.date),
-        painArea: row.painArea,
-        painAreaLabel: row.painArea ? PAIN_AREA_LABEL[row.painArea] : null,
-        painScore: row.painScore,
-        probeFeedback: row.probeFeedback,
-        needsProbe: status !== "full" && row.probeFeedback !== "A",
-      },
-    };
-  } catch (error) {
-    console.error("数据库写入失败的完整原因:", error);
-    return { success: false, error: errorMessage(error) };
-  }
-}
-
-export type CoachFlagRow = {
-  playerId: string;
-  playerName: string;
-  tier: Exclude<ReadinessTier, "green">;
-  readinessScore: number;
-  reason: string;
-  injuryPartLabel: string | null;
-  /** 脱敏生理负荷；无授权或无标签时为 null */
-  physiologicalLoadLabel: string | null;
-  physiologicalLoadHint: string | null;
-};
-
-export type CoachDualTrackRow = {
-  playerId: string;
-  playerName: string;
-  readinessScore: number | null;
-  loadBandId: LoadBandId | null;
-  loadBandLabel: string | null;
-  readinessTone: "red" | "yellow" | "green" | null;
-  availabilityStatus: AvailabilityStatus;
-  availabilityLabel: string;
-  painAreaLabel: string | null;
-};
-
-export type CoachSessionFeedbackRow = {
-  playerId: string;
-  playerName: string;
-  sessionRpe: number;
-  durationMin: number;
-  /** RPE × 时长；仅展示，不做 ACWR */
-  loadAu: number;
-  hasPain: boolean;
-  painAreaLabel: string | null;
-  note: string | null;
-};
-
-export type CoachDaySummary = {
-  date: string;
-  /** 双轨全员摘要（队员） */
-  roster: CoachDualTrackRow[];
-  unavailable: CoachDualTrackRow[];
-  modified: CoachDualTrackRow[];
-  energyReduced: CoachDualTrackRow[];
-  red: CoachFlagRow[];
-  yellow: CoachFlagRow[];
-  loadNotes: CoachFlagRow[];
-  sessionFeedbacks: CoachSessionFeedbackRow[];
-  checkedInCount: number;
-  rosterCount: number;
-  uncheckedCount: number;
-  feedbackCount: number;
-};
-
-export type SaveSessionFeedbackPayload = {
-  playerId: string;
-  date: string;
-  sessionRpe: number;
-  durationMin: number;
-  hasPain: boolean;
-  painArea: PainArea | null;
-  note: string | null;
-};
-
-// 推导步骤：校验 RPE/时长 → upsert SessionFeedback（每日一条）
-export async function saveSessionFeedback(
-  payload: SaveSessionFeedbackPayload
-): Promise<ActionResult> {
-  try {
-    if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
-      return { success: false, error: "playerId 无效" };
-    }
-    if (
-      typeof payload.date !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(payload.date)
-    ) {
-      return { success: false, error: "date 须为 YYYY-MM-DD" };
-    }
-    const sessionRpe = clampScore0to10(payload.sessionRpe);
-    if (sessionRpe === null || sessionRpe < 1) {
-      return { success: false, error: "sessionRpe 须为 1–10" };
-    }
-    if (
-      typeof payload.durationMin !== "number" ||
-      !Number.isFinite(payload.durationMin) ||
-      payload.durationMin < 1 ||
-      payload.durationMin > 360
-    ) {
-      return { success: false, error: "durationMin 须为 1–360" };
-    }
-
-    const hasPain = Boolean(payload.hasPain);
-    const painArea = hasPain ? asPainArea(payload.painArea) : null;
-    if (hasPain && !painArea) {
-      return { success: false, error: "有不适时须选择部位" };
-    }
-
-    const noteRaw =
-      typeof payload.note === "string" ? payload.note.trim() : "";
-    const note = noteRaw ? noteRaw.slice(0, 200) : null;
-
-    const player = await prisma.player.findUnique({
-      where: { id: payload.playerId },
-      select: { id: true },
-    });
-    if (!player) {
-      return { success: false, error: "云端无此队员" };
-    }
-
-    const date = parseDateOnly(payload.date);
-    const durationMin = Math.round(payload.durationMin);
-    const data = {
-      schemaVersion: SESSION_FEEDBACK_SCHEMA_VERSION,
-      sessionRpe,
-      durationMin,
-      hasPain,
-      painArea,
-      note,
-    };
-
-    console.log(
-      "即将送入 Prisma 的数据:",
-      JSON.stringify({ playerId: player.id, date: payload.date, ...data }, null, 2)
-    );
-
-    await prisma.sessionFeedback.upsert({
-      where: {
-        playerId_date: {
-          playerId: player.id,
-          date,
-        },
-      },
-      create: {
-        player: { connect: { id: player.id } },
-        date,
-        schemaVersion: data.schemaVersion,
-        sessionRpe: data.sessionRpe,
-        durationMin: data.durationMin,
-        hasPain: data.hasPain,
-        painArea: data.painArea,
-        note: data.note,
-      },
-      update: {
-        schemaVersion: data.schemaVersion,
-        sessionRpe: data.sessionRpe,
-        durationMin: data.durationMin,
-        hasPain: data.hasPain,
-        painArea: data.painArea,
-        note: data.note,
-      },
-    });
-
-    return { success: true };
-  } catch (error) {
-    console.error("数据库写入失败的完整原因:", error);
-    return { success: false, error: errorMessage(error) };
-  }
-}
-
-// 推导步骤：校验请求者是教练 → 拉同队当日 readiness + 训后反馈 → 红/黄 + 训后栏
-export async function getCoachDaySummary(
-  requesterPlayerId: string,
-  dateStr?: string
-): Promise<ActionResult<{ summary: CoachDaySummary }>> {
-  try {
-    if (
-      typeof requesterPlayerId !== "string" ||
-      !requesterPlayerId.trim()
-    ) {
-      return { success: false, error: "playerId 无效" };
-    }
-
-    const date =
-      typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
-        ? dateStr
-        : getTodayDateStr();
-
-    const requester = await prisma.player.findUnique({
-      where: { id: requesterPlayerId },
-      select: { id: true, role: true, teamId: true },
-    });
-    if (!requester) {
-      return { success: false, error: "云端无此队员" };
-    }
-    if (requester.role !== "coach") {
-      return { success: false, error: "仅教练可查看全队日摘要" };
-    }
-
-    const roster = await prisma.player.findMany({
-      where: { teamId: requester.teamId },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, role: true },
-    });
-    const rosterIds = roster.map((p) => p.id);
-    const playerIds = roster
-      .filter((p) => p.role !== "coach")
-      .map((p) => p.id);
-    const nameById = new Map(roster.map((p) => [p.id, p.name]));
-    const day = parseDateOnly(date);
-
-    const [checks, feedbackRows, profiles, availabilityRows] =
-      await Promise.all([
-        prisma.readinessCheck.findMany({
-          where: { playerId: { in: rosterIds }, date: day },
-        }),
-        prisma.sessionFeedback.findMany({
-          where: { playerId: { in: playerIds }, date: day },
-          orderBy: [{ hasPain: "desc" }, { sessionRpe: "desc" }],
-        }),
-        prisma.cycleProfile.findMany({
-          where: { playerId: { in: rosterIds } },
-          select: {
-            playerId: true,
-            sharingLevel: true,
-            trackingEnabled: true,
-          },
-        }),
-        prisma.availabilityCheck.findMany({
-          where: { playerId: { in: playerIds }, date: day },
-        }),
-      ]);
-
-    // 近 7 天未解除可用性（当日无记录时回退）
-    const cutoff = new Date(day);
-    cutoff.setUTCDate(cutoff.getUTCDate() - AVAILABILITY_LOOKBACK_DAYS);
-    const recentAvailability = await prisma.availabilityCheck.findMany({
-      where: {
-        playerId: { in: playerIds },
-        date: { gte: cutoff, lte: day },
-        status: { not: "full" },
-      },
-      orderBy: { date: "desc" },
-    });
-
-    const profileByPlayer = new Map(
-      profiles.map((p) => [p.playerId, p] as const)
-    );
-    const checkByPlayer = new Map(checks.map((row) => [row.playerId, row]));
-    const availToday = new Map(
-      availabilityRows.map((row) => [row.playerId, row] as const)
-    );
-    const availFallback = new Map<string, (typeof recentAvailability)[0]>();
-    for (const row of recentAvailability) {
-      if (!availFallback.has(row.playerId)) {
-        availFallback.set(row.playerId, row);
-      }
-    }
-
-    const red: CoachFlagRow[] = [];
-    const yellow: CoachFlagRow[] = [];
-    const loadNotes: CoachFlagRow[] = [];
-    const dualRoster: CoachDualTrackRow[] = [];
-
-    for (const player of roster) {
-      if (player.role === "coach") continue;
-
-      const row = checkByPlayer.get(player.id);
-      const availRow = availToday.get(player.id) ?? availFallback.get(player.id);
-      const availabilityStatus = (availRow?.status ??
-        "full") as AvailabilityStatus;
-      const loadBand = row
-        ? loadBandFromScore(row.readinessScore)
-        : null;
-
-      dualRoster.push({
-        playerId: player.id,
-        playerName: player.name,
-        readinessScore: row?.readinessScore ?? null,
-        loadBandId: loadBand?.id ?? null,
-        loadBandLabel: loadBand?.label ?? null,
-        readinessTone: loadBand ? loadBandTone(loadBand.id) : null,
-        availabilityStatus,
-        availabilityLabel: availabilityLabel(availabilityStatus),
-        painAreaLabel: availRow?.painArea
-          ? PAIN_AREA_LABEL[availRow.painArea]
-          : null,
-      });
-
-      if (!row) continue;
-
-      // 体能侧列表：仅用负荷带，不用伤病熔断
-      const tone = loadBandTone(loadBandFromScore(row.readinessScore).id);
-      const profile = profileByPlayer.get(player.id);
-      const canShareLoad =
-        profile?.trackingEnabled === true &&
-        (profile.sharingLevel === "load_only" ||
-          profile.sharingLevel === "phase_label");
-      const tag = canShareLoad ? row.physiologicalLoadTag : null;
-      const physiologicalLoadLabel = tag ? LOAD_TAG_LABEL[tag] : null;
-      const physiologicalLoadHint = tag ? LOAD_TAG_COACH_HINT[tag] : null;
-
-      if (tone === "red" || tone === "yellow") {
-        const flag: CoachFlagRow = {
-          playerId: player.id,
-          playerName: player.name,
-          tier: tone,
-          readinessScore: row.readinessScore,
-          reason: loadBandFromScore(row.readinessScore).label,
-          injuryPartLabel: null,
-          physiologicalLoadLabel,
-          physiologicalLoadHint,
-        };
-        if (tone === "red") red.push(flag);
-        else yellow.push(flag);
-      } else if (physiologicalLoadLabel && physiologicalLoadHint) {
-        loadNotes.push({
-          playerId: player.id,
-          playerName: player.name,
-          tier: "yellow",
-          readinessScore: row.readinessScore,
-          reason: physiologicalLoadLabel,
-          injuryPartLabel: null,
-          physiologicalLoadLabel,
-          physiologicalLoadHint,
-        });
-      }
-    }
-
-    const unavailable = dualRoster.filter(
-      (r) => r.availabilityStatus === "unavailable"
-    );
-    const modified = dualRoster.filter(
-      (r) => r.availabilityStatus === "modified"
-    );
-    const energyReduced = dualRoster.filter(
-      (r) =>
-        r.availabilityStatus !== "unavailable" &&
-        (r.readinessTone === "yellow" || r.readinessTone === "red")
-    );
-
-    const sessionFeedbacks: CoachSessionFeedbackRow[] = feedbackRows.map(
-      (row) => ({
-        playerId: row.playerId,
-        playerName: nameById.get(row.playerId) ?? "未知",
-        sessionRpe: row.sessionRpe,
-        durationMin: row.durationMin,
-        loadAu: row.sessionRpe * row.durationMin,
-        hasPain: row.hasPain,
-        painAreaLabel: row.painArea ? PAIN_AREA_LABEL[row.painArea] : null,
-        note: row.note,
-      })
-    );
-
-    const checkedInCount = checks.length;
-    const rosterCount = playerIds.length;
-
-    return {
-      success: true,
-      summary: {
-        date,
-        roster: dualRoster,
-        unavailable,
-        modified,
-        energyReduced,
-        red,
-        yellow,
-        loadNotes,
-        sessionFeedbacks,
-        checkedInCount,
-        rosterCount,
-        uncheckedCount: Math.max(0, rosterCount - checkedInCount),
-        feedbackCount: sessionFeedbacks.length,
-      },
-    };
-  } catch (error) {
-    console.error("数据库写入失败的完整原因:", error);
-    return { success: false, error: errorMessage(error) };
-  }
 }
 
 // ——— 生理周期：知情同意 / 事件 / 个人化长度 ———
@@ -1430,7 +316,6 @@ async function refreshTypicalLength(playerId: string): Promise<void> {
   });
 }
 
-// 推导步骤：查 CycleProfile + period_start 事件 → 组装 DTO（无档案返回 null）
 export async function getCycleProfile(
   playerId: string
 ): Promise<ActionResult<{ profile: CycleProfileDto | null }>> {
@@ -1452,7 +337,6 @@ export type ConsentCyclePayload = {
   seedPeriodStart?: string;
 };
 
-// 推导步骤：校验队员 → upsert 同意档案 → 可选写入首条经期开始 → 刷新典型长度
 export async function consentToCycleTracking(
   payload: ConsentCyclePayload
 ): Promise<ActionResult<{ profile: CycleProfileDto }>> {
@@ -1460,8 +344,7 @@ export async function consentToCycleTracking(
     if (typeof payload.playerId !== "string" || !payload.playerId.trim()) {
       return { success: false, error: "playerId 无效" };
     }
-    const sharingLevel =
-      asCycleSharingLevel(payload.sharingLevel) ?? "none";
+    const sharingLevel = asCycleSharingLevel(payload.sharingLevel) ?? "none";
 
     const player = await prisma.player.findUnique({
       where: { id: payload.playerId },
@@ -1528,7 +411,6 @@ export type UpdateCycleProfilePayload = {
   trackingEnabled?: boolean;
 };
 
-// 推导步骤：须已有同意档案 → 更新分享级别/激素避孕/敏感项/开关
 export async function updateCycleProfileSettings(
   payload: UpdateCycleProfilePayload
 ): Promise<ActionResult<{ profile: CycleProfileDto }>> {
@@ -1578,7 +460,6 @@ export type RecordPeriodStartPayload = {
   crampsScore?: number;
 };
 
-// 推导步骤：须追踪开启 → 同日 period_start 去重 → 刷新 typicalLengthDays
 export async function recordPeriodStart(
   payload: RecordPeriodStartPayload
 ): Promise<ActionResult<{ profile: CycleProfileDto }>> {
@@ -1636,4 +517,3 @@ export async function recordPeriodStart(
     return { success: false, error: errorMessage(error) };
   }
 }
-

@@ -9,13 +9,14 @@ import {
 } from "@/lib/gameArchive";
 import { getPlayerProfileData } from "@/lib/actions";
 import { updatePlayer } from "@/lib/playersApi";
-import {
-  loadPlayerInjuryLog,
-  type InjuryLogEntry,
-} from "@/lib/injuryLog";
 import { loadPlayerReadinessHistory } from "@/lib/readinessHistory";
+import { loadPlayerInjuryCaseDrafts } from "@/lib/injuryCases";
+import { PAIN_AREA_LABEL } from "@/lib/clinical/painAreas";
+import { quadrantLabel } from "@/lib/clinical/preQuadrant";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import SoftballFieldSvg from "@/components/test-day/SoftballFieldSvg";
+import type { ProfileInjuryBrief, ProfileLatestStatus } from "@/lib/statusActions";
+import type { BodyInsight30dReport } from "@/lib/clinical/bodyInsight30d";
 
 const formatPercent = (value: number): string => {
   if (!Number.isFinite(value) || value < 0) return "0.0%";
@@ -83,24 +84,43 @@ export default function ProfilePage() {
   const [hits, setHits] = useState<HitRecord[]>([]);
   const [speedRecords, setSpeedRecords] = useState<SpeedRecord[]>([]);
   const [sessionCount, setSessionCount] = useState(0);
-  const [injuryLog, setInjuryLog] = useState<InjuryLogEntry[]>([]);
-  const [latestReadiness, setLatestReadiness] = useState<number | null>(null);
-  const [availabilityLabelText, setAvailabilityLabelText] =
-    useState("完全可用");
-  const [availabilityPain, setAvailabilityPain] = useState<string | null>(null);
+  const [injuryCases, setInjuryCases] = useState<ProfileInjuryBrief[]>([]);
+  const [latestStatus, setLatestStatus] = useState<ProfileLatestStatus | null>(
+    null
+  );
+  const [insight, setInsight] = useState<BodyInsight30dReport | null>(null);
+  const [showInsight, setShowInsight] = useState(false);
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
     let cancelled = false;
     setDisplayName(currentUser.playerName);
-    // 先用本地草稿占位，云端返回后覆盖
-    setInjuryLog(loadPlayerInjuryLog(currentUser.playerId).slice(0, 5));
     const readiness = loadPlayerReadinessHistory(currentUser.playerId);
-    setLatestReadiness(readiness[0]?.readinessScore ?? null);
+    if (readiness[0]) {
+      setLatestStatus({
+        date: readiness[0].date,
+        quadrant: readiness[0].quadrant,
+        quadrantLabel: quadrantLabel(readiness[0].quadrant),
+        physicalBattery: readiness[0].physicalBattery,
+        mentalDrive: readiness[0].mentalDrive,
+      });
+    }
+    const drafts = loadPlayerInjuryCaseDrafts(currentUser.playerId);
+    if (drafts.length > 0) {
+      setInjuryCases(
+        drafts.slice(0, 8).map((c) => ({
+          id: c.id,
+          painAreaLabel: PAIN_AREA_LABEL[c.painArea],
+          status: c.status,
+          latestPain: c.painLogs.at(-1)?.painScore ?? null,
+          trendLabel: "",
+          startDate: c.startDate,
+        }))
+      );
+    }
     setIsLoading(true);
 
     (async () => {
-      // Session 凭证字段为 playerId（非 id）
       const res = await getPlayerProfileData(currentUser.playerId);
       if (cancelled) return;
       if (!res.success) {
@@ -112,14 +132,9 @@ export default function ProfilePage() {
         setHits(res.hits);
         setSpeedRecords(res.speedRecords);
         setSessionCount(res.sessionCount);
-        if (res.injuryLogs.length > 0) {
-          setInjuryLog(res.injuryLogs);
-        }
-        if (res.latestReadiness !== null) {
-          setLatestReadiness(res.latestReadiness);
-        }
-        setAvailabilityLabelText(res.availabilityLabel);
-        setAvailabilityPain(res.availabilityPainLabel);
+        setInjuryCases(res.injuryCases);
+        setLatestStatus(res.latestStatus);
+        setInsight(res.insight);
       }
       setIsLoading(false);
     })();
@@ -235,14 +250,10 @@ export default function ProfilePage() {
           </span>
           <div className="mt-2 flex flex-col gap-0.5 text-xs text-zinc-500">
             <p>
-              体能准备度：
-              {latestReadiness !== null
-                ? `${latestReadiness} / 100`
+              最近象限：
+              {latestStatus
+                ? `${latestStatus.quadrantLabel} · 电量 ${latestStatus.physicalBattery.toFixed(1)} · 动力 ${latestStatus.mentalDrive}`
                 : "暂无打卡"}
-            </p>
-            <p>
-              上场可用性：{availabilityLabelText}
-              {availabilityPain ? ` · ${availabilityPain}` : ""}
             </p>
           </div>
         </div>
@@ -310,25 +321,53 @@ export default function ProfilePage() {
         </div>
 
         <div className="flex flex-col gap-2 border border-zinc-200 p-4">
-          <span className="text-xs uppercase text-gray-500">
-            近期伤病史
-          </span>
-          {injuryLog.length === 0 ? (
+          <span className="text-xs uppercase text-gray-500">近期伤病史</span>
+          {injuryCases.length === 0 ? (
             <p className="text-sm text-zinc-400">
-              暂无归档记录，请前往「运动损伤」生成并归档伤后建议
+              暂无损伤 episode，请前往「运动损伤」记录
             </p>
           ) : (
             <ul className="flex flex-col gap-1.5 text-sm text-zinc-700">
-              {injuryLog.map((entry) => (
+              {injuryCases.map((entry) => (
                 <li key={entry.id}>
-                  {new Date(entry.timestamp).toLocaleDateString("zh-CN")} ·{" "}
-                  {entry.painAreaLabel} · VAS {entry.painScore} ·{" "}
-                  {entry.symptom}
+                  {entry.startDate} · {entry.painAreaLabel} ·{" "}
+                  {entry.status === "active" ? "关注中" : "已康复"}
+                  {entry.latestPain != null ? ` · 痛分 ${entry.latestPain}` : ""}
+                  {entry.trendLabel ? ` · ${entry.trendLabel}` : ""}
                 </li>
               ))}
             </ul>
           )}
         </div>
+
+        {insight && (
+          <div className="flex flex-col gap-2 border border-zinc-200 p-4">
+            <button
+              type="button"
+              onClick={() => setShowInsight((v) => !v)}
+              className="text-left text-xs uppercase text-gray-500"
+            >
+              30 天身体洞察 {showInsight ? "· 收起" : "· 展开"}
+            </button>
+            {showInsight && (
+              <div className="flex flex-col gap-2 text-sm text-zinc-700">
+                <p className="leading-relaxed">{insight.narrative}</p>
+                <p className="text-xs text-zinc-500">
+                  评估 {insight.coverage.preDays} 天 · 训后{" "}
+                  {insight.coverage.postSessions} 次 · 疼痛日志{" "}
+                  {insight.coverage.painLogDays} 天 · 负荷合计{" "}
+                  {insight.training.totalLoad}
+                </p>
+                {insight.signalFlags.length > 0 && (
+                  <p className="text-xs text-zinc-500">
+                    旗标：{insight.signalFlags.join(" · ")}
+                  </p>
+                )}
+                <p className="text-xs text-zinc-400">{insight.disclaimer}</p>
+              </div>
+            )}
+          </div>
+        )}
       </main>
     </div>
   );

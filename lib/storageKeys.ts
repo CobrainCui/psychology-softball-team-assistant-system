@@ -9,7 +9,9 @@ export const STORAGE_KEYS = {
   sessionDraft: "softball_session_draft",
   gamesHistory: "softball_games_history",
   readinessHistory: "softball_readiness_history",
+  /** @deprecated 旧 VAS 伤病快照；损伤改为 episode 草稿 */
   injuryLog: "softball_injury_log",
+  injuryCases: "softball_injury_cases",
   /** 训后 session RPE 本地草稿（云端权威） */
   sessionFeedback: "softball_session_feedback",
   /** 女性队员上次经期开始日：playerId → YYYY-MM-DD */

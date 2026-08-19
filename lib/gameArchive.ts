@@ -1,10 +1,15 @@
 // 综合测试日数据契约：写入端 (测试清单) 与读取端 (个人档案) 共用唯一类型与迁移。
 
-export const GAME_ARCHIVE_SCHEMA_VERSION = 1;
+export const GAME_ARCHIVE_SCHEMA_VERSION = 2;
 
 export type HitResult = "LD" | "FB" | "GB" | "PU" | "MISS";
 export type PitchType = "FB" | "CB" | "SL" | "CH" | "OT";
 export type HitQuality = "Hard" | "Medium" | "Soft";
+export type PitchCall = "strike" | "ball";
+export type ThrowBlame = "thrower" | "firstBase" | "both";
+export type ThrowTestItem = "6-3传球" | "4-3传球";
+
+export const THROW_TEST_ITEMS: readonly ThrowTestItem[] = ["6-3传球", "4-3传球"];
 
 // 打点记录：x/y 为打点区相对百分比 (0-100)；挥空 (MISS) 无落点，x/y 留空
 export interface HitRecord {
@@ -30,6 +35,48 @@ export interface SpeedRecord {
   timestamp: number;
 }
 
+// 接高飞：每人可多球；caught=接住；note 选填
+export interface FlyCatchAttempt {
+  id: string;
+  playerId: string;
+  playerName: string;
+  caught: boolean;
+  note?: string;
+  timestamp: number;
+}
+
+// 好球判断矩阵的一列：同一投手可出现多次（多次投球）
+export interface StrikeJudgeColumn {
+  id: string;
+  pitcherId: string;
+  pitcherName: string;
+  sortOrder: number;
+}
+
+// 已填判断格；正确与否由 pitchCall × swung 派生，不落库
+export interface StrikeJudgeCell {
+  columnId: string;
+  judgeId: string;
+  judgeName: string;
+  pitchCall: PitchCall;
+  swung: boolean;
+  timestamp: number;
+}
+
+// 6-3 / 4-3 一格一笔；失败时 blame 必填
+export interface ThrowPlay {
+  id: string;
+  testItem: ThrowTestItem;
+  throwerId: string;
+  throwerName: string;
+  firstBaseId: string;
+  firstBaseName: string;
+  success: boolean;
+  blame?: ThrowBlame;
+  note?: string;
+  timestamp: number;
+}
+
 // 单场归档快照：schemaVersion 用于后续字段演进；旧版可能只有 data 而无 hits
 export interface GameArchive {
   schemaVersion: number;
@@ -37,9 +84,20 @@ export interface GameArchive {
   date: string;
   hits: HitRecord[];
   speedRecords: SpeedRecord[];
+  flyCatchAttempts: FlyCatchAttempt[];
+  strikeJudgeColumns: StrikeJudgeColumn[];
+  strikeJudgeCells: StrikeJudgeCell[];
+  throwPlays: ThrowPlay[];
   /** @deprecated 旧版打点字段，读取时由 migrate 归一到 hits */
   data?: HitRecord[];
 }
+
+export type SkillArchiveSlice = {
+  flyCatchAttempts: FlyCatchAttempt[];
+  strikeJudgeColumns: StrikeJudgeColumn[];
+  strikeJudgeCells: StrikeJudgeCell[];
+  throwPlays: ThrowPlay[];
+};
 
 // 安全提取打点：优先 hits，回退旧版 data，杜绝对 undefined 调用数组方法
 export function getSafeHits(game: {
@@ -55,7 +113,127 @@ export function getSafeSpeedRecords(game: {
   return game.speedRecords ?? [];
 }
 
-// 推导步骤：识别原始对象 → 归一 hits/speedRecords → 补齐 schemaVersion
+export function getSafeFlyCatchAttempts(game: {
+  flyCatchAttempts?: FlyCatchAttempt[];
+}): FlyCatchAttempt[] {
+  return game.flyCatchAttempts ?? [];
+}
+
+export function getSafeStrikeJudgeColumns(game: {
+  strikeJudgeColumns?: StrikeJudgeColumn[];
+}): StrikeJudgeColumn[] {
+  return game.strikeJudgeColumns ?? [];
+}
+
+export function getSafeStrikeJudgeCells(game: {
+  strikeJudgeCells?: StrikeJudgeCell[];
+}): StrikeJudgeCell[] {
+  return game.strikeJudgeCells ?? [];
+}
+
+export function getSafeThrowPlays(game: {
+  throwPlays?: ThrowPlay[];
+}): ThrowPlay[] {
+  return game.throwPlays ?? [];
+}
+
+export function isHitRecord(value: unknown): value is HitRecord {
+  if (!value || typeof value !== "object") return false;
+  const hit = value as Record<string, unknown>;
+  return (
+    typeof hit.id === "string" &&
+    typeof hit.result === "string" &&
+    typeof hit.playerId === "string" &&
+    typeof hit.playerName === "string" &&
+    typeof hit.timestamp === "number"
+  );
+}
+
+export function isSpeedRecord(value: unknown): value is SpeedRecord {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === "string" &&
+    typeof row.playerId === "string" &&
+    typeof row.playerName === "string" &&
+    typeof row.timestamp === "number"
+  );
+}
+
+export function asPitchCall(value: unknown): PitchCall | null {
+  return value === "strike" || value === "ball" ? value : null;
+}
+
+export function asThrowBlame(value: unknown): ThrowBlame | null {
+  return value === "thrower" || value === "firstBase" || value === "both"
+    ? value
+    : null;
+}
+
+export function asThrowTestItem(value: unknown): ThrowTestItem | null {
+  return value === "6-3传球" || value === "4-3传球" ? value : null;
+}
+
+export function isFlyCatchAttempt(value: unknown): value is FlyCatchAttempt {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === "string" &&
+    typeof row.playerId === "string" &&
+    typeof row.playerName === "string" &&
+    typeof row.caught === "boolean" &&
+    typeof row.timestamp === "number"
+  );
+}
+
+export function isStrikeJudgeColumn(value: unknown): value is StrikeJudgeColumn {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === "string" &&
+    typeof row.pitcherId === "string" &&
+    typeof row.pitcherName === "string" &&
+    typeof row.sortOrder === "number"
+  );
+}
+
+export function isStrikeJudgeCell(value: unknown): value is StrikeJudgeCell {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.columnId === "string" &&
+    typeof row.judgeId === "string" &&
+    typeof row.judgeName === "string" &&
+    asPitchCall(row.pitchCall) !== null &&
+    typeof row.swung === "boolean" &&
+    typeof row.timestamp === "number"
+  );
+}
+
+export function isThrowPlay(value: unknown): value is ThrowPlay {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  if (asThrowTestItem(row.testItem) === null) return false;
+  if (row.success === false && asThrowBlame(row.blame) === null) return false;
+  return (
+    typeof row.id === "string" &&
+    typeof row.throwerId === "string" &&
+    typeof row.throwerName === "string" &&
+    typeof row.firstBaseId === "string" &&
+    typeof row.firstBaseName === "string" &&
+    typeof row.success === "boolean" &&
+    typeof row.timestamp === "number"
+  );
+}
+
+function filterTyped<T>(
+  raw: unknown,
+  guard: (value: unknown) => value is T
+): T[] {
+  return Array.isArray(raw) ? raw.filter(guard) : [];
+}
+
+// 推导步骤：识别原始对象 → 归一 hits/speed/技能表 → 缺字段当空数组
 export function migrateGameArchive(raw: unknown): GameArchive | null {
   if (!raw || typeof raw !== "object") return null;
 
@@ -67,12 +245,12 @@ export function migrateGameArchive(raw: unknown): GameArchive | null {
   const hits = getSafeHits({
     hits: Array.isArray(obj.hits) ? (obj.hits as HitRecord[]) : undefined,
     data: Array.isArray(obj.data) ? (obj.data as HitRecord[]) : undefined,
-  });
+  }).filter(isHitRecord);
   const speedRecords = getSafeSpeedRecords({
     speedRecords: Array.isArray(obj.speedRecords)
       ? (obj.speedRecords as SpeedRecord[])
       : undefined,
-  });
+  }).filter(isSpeedRecord);
 
   return {
     schemaVersion:
@@ -83,6 +261,13 @@ export function migrateGameArchive(raw: unknown): GameArchive | null {
     date,
     hits,
     speedRecords,
+    flyCatchAttempts: filterTyped(obj.flyCatchAttempts, isFlyCatchAttempt),
+    strikeJudgeColumns: filterTyped(
+      obj.strikeJudgeColumns,
+      isStrikeJudgeColumn
+    ),
+    strikeJudgeCells: filterTyped(obj.strikeJudgeCells, isStrikeJudgeCell),
+    throwPlays: filterTyped(obj.throwPlays, isThrowPlay),
   };
 }
 
@@ -93,9 +278,19 @@ export function migrateGameArchiveList(raw: unknown): GameArchive[] {
     .filter((game): game is GameArchive => game !== null);
 }
 
+export function emptySkillArchiveSlice(): SkillArchiveSlice {
+  return {
+    flyCatchAttempts: [],
+    strikeJudgeColumns: [],
+    strikeJudgeCells: [],
+    throwPlays: [],
+  };
+}
+
 export function createGameArchive(
   hits: HitRecord[],
-  speedRecords: SpeedRecord[]
+  speedRecords: SpeedRecord[],
+  skills: SkillArchiveSlice = emptySkillArchiveSlice()
 ): GameArchive {
   return {
     schemaVersion: GAME_ARCHIVE_SCHEMA_VERSION,
@@ -103,5 +298,9 @@ export function createGameArchive(
     date: new Date().toISOString(),
     hits,
     speedRecords,
+    flyCatchAttempts: skills.flyCatchAttempts,
+    strikeJudgeColumns: skills.strikeJudgeColumns,
+    strikeJudgeCells: skills.strikeJudgeCells,
+    throwPlays: skills.throwPlays,
   };
 }

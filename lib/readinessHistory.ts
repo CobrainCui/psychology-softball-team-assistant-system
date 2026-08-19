@@ -1,42 +1,52 @@
-// 每日综合状态评估时序：按 playerId+date upsert。
+// 每日综合状态评估时序：按 playerId+date upsert。五维 1–5，高分更好。
 
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { safeParseJSON } from "@/lib/safeParse";
-import { isPainArea, type PainArea } from "@/lib/clinical/painAreas";
+import type { Scale5 } from "@/lib/clinical/preDimensions";
+import { clampScale5 } from "@/lib/clinical/preDimensions";
+import type { PreQuadrant } from "@/lib/clinical/preQuadrant";
 
-export type ProbeFeedback = "A" | "B" | "C";
-
-export type SleepQuality = "good" | "normal" | "bad";
-
-export interface ReadinessHistoryEntry {
+export type ReadinessHistoryEntry = {
   playerId: string;
   date: string;
-  readinessScore: number;
-  hasNewInjury: boolean;
-  injuryPart: PainArea | null;
-  injuryScore: number;
-  probeFeedback: ProbeFeedback | null;
-  /** Wellness 原值；旧本地草稿可能缺失 */
-  sleepQuality?: SleepQuality | null;
-  stressScore?: number | null;
-  fatigueScore?: number | null;
-  sorenessScore?: number | null;
-}
+  sleep: Scale5;
+  stress: Scale5;
+  fatigue: Scale5;
+  soreness: Scale5;
+  willingness: Scale5;
+  physicalBattery: number;
+  mentalDrive: number;
+  quadrant: PreQuadrant;
+};
 
-/** 软组织恢复常超 3 天；未探针 A 清除前持续追踪 */
-export const RECENT_INJURY_LOOKBACK_DAYS = 7;
+const QUADRANTS = new Set<PreQuadrant>([
+  "slack",
+  "real_fatigue",
+  "injury_risk",
+  "peak",
+]);
 
 export function getTodayDateStr(today: Date = new Date()): string {
   return today.toISOString().slice(0, 10);
 }
 
-function isReadinessHistoryEntry(value: unknown): value is ReadinessHistoryEntry {
+function isReadinessHistoryEntry(
+  value: unknown
+): value is ReadinessHistoryEntry {
   if (!value || typeof value !== "object") return false;
   const entry = value as Record<string, unknown>;
   return (
     typeof entry.playerId === "string" &&
     typeof entry.date === "string" &&
-    typeof entry.readinessScore === "number"
+    clampScale5(entry.sleep) != null &&
+    clampScale5(entry.stress) != null &&
+    clampScale5(entry.fatigue) != null &&
+    clampScale5(entry.soreness) != null &&
+    clampScale5(entry.willingness) != null &&
+    typeof entry.physicalBattery === "number" &&
+    typeof entry.mentalDrive === "number" &&
+    typeof entry.quadrant === "string" &&
+    QUADRANTS.has(entry.quadrant as PreQuadrant)
   );
 }
 
@@ -44,10 +54,7 @@ export function loadReadinessHistory(): ReadinessHistoryEntry[] {
   const raw = localStorage.getItem(STORAGE_KEYS.readinessHistory);
   const parsed = safeParseJSON<unknown>(raw, []);
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter(isReadinessHistoryEntry).map((entry) => ({
-    ...entry,
-    injuryPart: isPainArea(entry.injuryPart) ? entry.injuryPart : null,
-  }));
+  return parsed.filter(isReadinessHistoryEntry);
 }
 
 export function saveReadinessHistory(entries: ReadinessHistoryEntry[]): void {
@@ -72,22 +79,4 @@ export function loadPlayerReadinessHistory(
   return loadReadinessHistory()
     .filter((entry) => entry.playerId === playerId)
     .sort((a, b) => b.date.localeCompare(a.date));
-}
-
-// 最近 N 天内仍带有 injuryPart 的记录 → 今日需复测的部位
-export function findRecentInjuryPart(
-  history: ReadinessHistoryEntry[],
-  lookbackDays: number = RECENT_INJURY_LOOKBACK_DAYS,
-  today: Date = new Date()
-): PainArea | null {
-  if (history.length === 0) return null;
-
-  const cutoff = new Date(today);
-  cutoff.setDate(cutoff.getDate() - lookbackDays);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
-
-  const recentEntry = history.find(
-    (entry) => entry.date >= cutoffStr && entry.injuryPart !== null
-  );
-  return recentEntry?.injuryPart ?? null;
 }

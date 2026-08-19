@@ -2,15 +2,20 @@
 
 import { useEffect, useState } from "react";
 import AssignmentSidebar from "@/components/test-day/AssignmentSidebar";
-import TeeBallPanel from "@/components/test-day/TeeBallPanel";
+import FlyCatchPanel from "@/components/test-day/FlyCatchPanel";
 import SpeedTestPanel from "@/components/test-day/SpeedTestPanel";
+import StrikeJudgePanel from "@/components/test-day/StrikeJudgePanel";
+import TeeBallPanel from "@/components/test-day/TeeBallPanel";
+import ThrowMatrixPanel from "@/components/test-day/ThrowMatrixPanel";
 import { useTestDaySession } from "@/hooks/useTestDaySession";
 import { getPlayers, saveTestSession } from "@/lib/actions";
 import type { HitRecord, HitResult, SpeedRecord } from "@/lib/gameArchive";
 import {
+  accordionTestItems,
   saveSessionDraft,
   SESSION_DRAFT_SCHEMA_VERSION,
 } from "@/lib/sessionDraft";
+import { sessionArchiveHasContent } from "@/lib/testDay/archiveValidation";
 
 /** 与 Prisma HitResult / 大联盟弹道字典对齐；拒绝旧 1B/2B/3B/HR/OUT */
 const ALLOWED_HIT_RESULTS: ReadonlySet<HitResult> = new Set([
@@ -53,8 +58,8 @@ function sanitizeArchivePayload(hits: HitRecord[], speedRecords: SpeedRecord[]) 
 export default function Home() {
   const session = useTestDaySession();
   const [rosterReady, setRosterReady] = useState(false);
+  const visibleTestItems = accordionTestItems(session.testItems);
 
-  // 推导步骤：仅云端 getPlayers → 注入 players；成功前不渲染旧名册
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -83,14 +88,6 @@ export default function Home() {
   }, []);
 
   const handleArchiveGame = async () => {
-    if (session.hits.length === 0 && session.speedRecords.length === 0) {
-      window.alert("当前没有可归档的打点或测速记录。");
-      return;
-    }
-    if (!confirm("确认结束本次综合测试？当前记录将归档存查并清空盘面。")) {
-      return;
-    }
-
     const cleaned = sanitizeArchivePayload(
       session.hits,
       session.speedRecords
@@ -98,9 +95,21 @@ export default function Home() {
     const payload = {
       hits: cleaned.hits,
       speedRecords: cleaned.speedRecords,
+      flyCatchAttempts: session.flyCatchAttempts,
+      strikeJudgeColumns: session.strikeJudgeColumns,
+      strikeJudgeCells: session.strikeJudgeCells,
+      throwPlays: session.throwPlays,
       assignments: session.assignments,
       testItems: session.testItems,
     };
+
+    if (!sessionArchiveHasContent(payload)) {
+      window.alert("当前没有可归档的测试记录。");
+      return;
+    }
+    if (!confirm("确认结束本次综合测试？当前记录将归档存查并清空盘面。")) {
+      return;
+    }
 
     const res = await saveTestSession(payload);
     if (res.success) {
@@ -126,6 +135,10 @@ export default function Home() {
         speedRecords: session.speedRecords,
         assignments: session.assignments,
         testItems: session.testItems,
+        flyCatchAttempts: session.flyCatchAttempts,
+        strikeJudgeColumns: session.strikeJudgeColumns,
+        strikeJudgeCells: session.strikeJudgeCells,
+        throwPlays: session.throwPlays,
       });
     }
   };
@@ -159,7 +172,7 @@ export default function Home() {
           </h1>
 
           <div className="flex flex-col border border-zinc-300 bg-white">
-            {session.testItems.map((tab) => (
+            {visibleTestItems.map((tab) => (
               <div key={tab}>
                 <button
                   type="button"
@@ -203,6 +216,45 @@ export default function Home() {
                         speedInputs={session.speedInputs}
                         onSpeedInputChange={session.handleSpeedInputChange}
                         onRecordSpeed={session.handleRecordSpeed}
+                      />
+                    ) : tab === "接高飞" ? (
+                      <FlyCatchPanel
+                        assignedPlayers={session.flyCatchAssignedPlayers}
+                        attempts={session.flyCatchAttempts}
+                        noteDrafts={session.flyCatchNoteDrafts}
+                        onNoteDraftChange={session.handleFlyCatchNoteDraftChange}
+                        onRecordAttempt={session.handleRecordFlyCatch}
+                        onUndoLast={session.handleUndoFlyCatch}
+                      />
+                    ) : tab === "好球判断" ? (
+                      <StrikeJudgePanel
+                        judgePlayers={session.strikeJudgePlayers}
+                        pitcherPlayers={session.pitcherPlayers}
+                        columns={session.strikeJudgeColumns}
+                        cells={session.strikeJudgeCells}
+                        onAddColumn={session.handleAddStrikeJudgeColumn}
+                        onInitColumns={session.handleInitStrikeJudgeColumns}
+                        onReorderColumns={session.handleReorderStrikeJudgeColumns}
+                        onUpsertCell={session.handleUpsertStrikeJudgeCell}
+                        onClearCell={session.handleClearStrikeJudgeCell}
+                      />
+                    ) : tab === "6-3传球" ? (
+                      <ThrowMatrixPanel
+                        testItem="6-3传球"
+                        throwerPlayers={session.throw63Players}
+                        firstBasePlayers={session.firstBasePlayers}
+                        plays={session.throwPlays}
+                        onUpsertPlay={session.handleUpsertThrowPlay}
+                        onClearPlay={session.handleClearThrowPlay}
+                      />
+                    ) : tab === "4-3传球" ? (
+                      <ThrowMatrixPanel
+                        testItem="4-3传球"
+                        throwerPlayers={session.throw43Players}
+                        firstBasePlayers={session.firstBasePlayers}
+                        plays={session.throwPlays}
+                        onUpsertPlay={session.handleUpsertThrowPlay}
+                        onClearPlay={session.handleClearThrowPlay}
                       />
                     ) : (
                       <p className="py-6 text-center text-sm text-zinc-400">

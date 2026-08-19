@@ -1,5 +1,5 @@
 // Softball AI System — 权威数据契约（PostgreSQL）
-// 对齐 lib 层：Player / GameArchive / Readiness / InjuryLog
+// 对齐 lib 层：Player / GameArchive / Readiness（四象限）/ InjuryCase
 // 单队试点：Team 预留一队；正式成绩在此，localStorage 仅作 session 草稿
 
 generator client {
@@ -45,6 +45,17 @@ enum HitQuality {
   Soft
 }
 
+enum PitchCall {
+  strike
+  ball
+}
+
+enum ThrowBlame {
+  thrower
+  firstBase
+  both
+}
+
 enum PainArea {
   shoulder
   elbow
@@ -52,25 +63,43 @@ enum PainArea {
   knee
   ankle
   wrist
+  hip
+  other
 }
 
-enum ProbeFeedback {
-  A
-  B
-  C
+enum PreQuadrant {
+  slack
+  real_fatigue
+  injury_risk
+  peak
 }
 
-/// 与 assessment 页面 SleepQuality 对齐
-enum SleepQuality {
-  good
-  normal
-  bad
+enum ActivityType {
+  batting
+  throwing_defense
+  baserunning
+  conditioning
+  game
+  other
 }
 
-enum AvailabilityStatus {
-  full
-  modified
-  unavailable
+enum InjuryKind {
+  overuse
+  acute_strain
+  contusion
+  inflammation
+  post_care
+  unclear
+}
+
+enum InjuryCaseStatus {
+  active
+  recovered
+}
+
+enum InjuryNoteKind {
+  treatment
+  rehab
 }
 
 /// 生理周期事件类型（球员主权数据）
@@ -152,15 +181,19 @@ model Player {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  team            Team              @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  hits            Hit[]
-  speedRecords    SpeedRecord[]
-  readinessChecks ReadinessCheck[]
-  injuryLogs      InjuryLog[]
+  team                 Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  hits                 Hit[]
+  speedRecords         SpeedRecord[]
+  flyCatchAttempts      FlyCatchAttempt[]
+  strikeJudgeColumns    StrikeJudgeColumn[]
+  strikeJudgeCells      StrikeJudgeCell[]
+  throwPlaysAsThrower   ThrowPlay[] @relation("ThrowPlayThrower")
+  throwPlaysAsFirstBase ThrowPlay[] @relation("ThrowPlayFirstBase")
+  readinessChecks       ReadinessCheck[]
+  injuryCases      InjuryCase[]
   sessionFeedbacks SessionFeedback[]
-  cycleProfile    CycleProfile?
-  cycleEvents     CycleEvent[]
-  availabilityChecks AvailabilityCheck[]
+  cycleProfile     CycleProfile?
+  cycleEvents      CycleEvent[]
 
   @@index([teamId])
   @@index([name])
@@ -172,14 +205,22 @@ model TestSession {
   id            String   @id @default(cuid())
   teamId        String
   /// 对应前端 schemaVersion，便于迁移与兼容
-  schemaVersion Int      @default(1)
+  schemaVersion Int      @default(2)
   /// 归档时刻（原 gameId/date 语义合并）
   archivedAt    DateTime
+  /// 当场排阵快照（playerId → 测试项列表）
+  assignments   Json?
+  /// 当场测试项清单快照
+  testItems     Json?
   createdAt     DateTime @default(now())
 
-  team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  hits         Hit[]
-  speedRecords SpeedRecord[]
+  team               Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  hits               Hit[]
+  speedRecords       SpeedRecord[]
+  flyCatchAttempts   FlyCatchAttempt[]
+  strikeJudgeColumns StrikeJudgeColumn[]
+  strikeJudgeCells   StrikeJudgeCell[]
+  throwPlays         ThrowPlay[]
 
   @@index([teamId, archivedAt])
 }
@@ -219,23 +260,92 @@ model SpeedRecord {
   @@index([playerId])
 }
 
-// ——— 每日综合状态评估（原 readiness history；playerId+date 唯一） ———
+model FlyCatchAttempt {
+  id         String   @id @default(cuid())
+  sessionId  String
+  playerId   String
+  caught     Boolean
+  note       String?
+  recordedAt DateTime
+
+  session TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  player  Player      @relation(fields: [playerId], references: [id], onDelete: Restrict)
+
+  @@index([sessionId])
+  @@index([playerId])
+}
+
+model StrikeJudgeColumn {
+  id         String   @id @default(cuid())
+  sessionId  String
+  pitcherId  String
+  sortOrder  Int
+  recordedAt DateTime
+
+  session TestSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  pitcher Player          @relation(fields: [pitcherId], references: [id], onDelete: Restrict)
+  cells   StrikeJudgeCell[]
+
+  @@index([sessionId])
+  @@index([pitcherId])
+}
+
+model StrikeJudgeCell {
+  id         String    @id @default(cuid())
+  sessionId  String
+  columnId   String
+  judgeId    String
+  pitchCall  PitchCall
+  swung      Boolean
+  recordedAt DateTime
+
+  session TestSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  column  StrikeJudgeColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  judge   Player            @relation(fields: [judgeId], references: [id], onDelete: Restrict)
+
+  @@unique([columnId, judgeId])
+  @@index([sessionId])
+  @@index([judgeId])
+}
+
+model ThrowPlay {
+  id          String      @id @default(cuid())
+  sessionId   String
+  testItem    String
+  throwerId   String
+  firstBaseId String
+  success     Boolean
+  blame       ThrowBlame?
+  note        String?
+  recordedAt  DateTime
+
+  session   TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  thrower   Player      @relation("ThrowPlayThrower", fields: [throwerId], references: [id], onDelete: Restrict)
+  firstBase Player      @relation("ThrowPlayFirstBase", fields: [firstBaseId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, testItem, throwerId, firstBaseId])
+  @@index([sessionId])
+  @@index([throwerId])
+  @@index([firstBaseId])
+}
+
+// ——— 每日综合状态评估（五维 1–5 + 四象限；playerId+date 唯一） ———
 
 model ReadinessCheck {
-  id              String         @id @default(cuid())
-  playerId        String
+  id               String      @id @default(cuid())
+  playerId         String
   /// 自然日 YYYY-MM-DD（UTC 日期边界由应用层约定）
-  date            DateTime       @db.Date
-  readinessScore  Int
-  hasNewInjury    Boolean        @default(false)
-  injuryPart      PainArea?
-  injuryScore     Int            @default(0)
-  probeFeedback   ProbeFeedback?
-  /// Wellness 原值（队内启发式输入；可复盘趋势）
-  sleepQuality    SleepQuality?
-  stressScore     Int?
-  fatigueScore    Int?
-  sorenessScore   Int?
+  date             DateTime    @db.Date
+  /// 五维均为 1 极差 → 5 极佳（fatigue/soreness/stress 字段名历史遗留）
+  sleep            Int
+  stress           Int
+  fatigue          Int
+  soreness         Int
+  willingness      Int
+  physicalBattery  Float
+  mentalDrive      Int
+  quadrant         PreQuadrant
+  ruleVersion      String      @default("pre_quadrant_v1")
   /// 生理周期快照（可选；教练 API 默认不返回原始日期）
   cycleDay               Int?
   cyclePhaseCode         CyclePhaseCode?
@@ -245,8 +355,8 @@ model ReadinessCheck {
   cycleEnergy            CycleEnergyLevel?
   cycleMood              CycleMoodLevel?
   cycleIrregularFlag     Boolean           @default(false)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
@@ -291,60 +401,77 @@ model CycleEvent {
   @@index([playerId, eventType, date])
 }
 
-// ——— 伤病处方归档（原 injury log） ———
+// ——— 损伤 episode（疼痛日志 / 诊疗 / 康复；与 Readiness 互不熔断） ———
 
-model InjuryLog {
-  id            String   @id @default(cuid())
+model InjuryCase {
+  id            String           @id @default(cuid())
   playerId      String
-  schemaVersion Int      @default(1)
+  schemaVersion Int              @default(2)
   painArea      PainArea
-  painScore     Int
-  symptom       String
-  createdAt     DateTime @default(now())
+  locationHint  String           @default("")
+  injuryKind    InjuryKind
+  status        InjuryCaseStatus @default(active)
+  startDate     DateTime         @db.Date
+  recoveredAt   DateTime?        @db.Date
+  parentCaseId  String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
-  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  player     Player            @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  parent     InjuryCase?       @relation("InjuryRecurrence", fields: [parentCaseId], references: [id], onDelete: SetNull)
+  recurrences InjuryCase[]     @relation("InjuryRecurrence")
+  painLogs   InjuryPainLog[]
+  notes      InjuryNoteRecord[]
 
-  @@index([playerId, createdAt])
+  @@index([playerId, status])
+  @@index([playerId, startDate])
 }
 
-// ——— 训后主观负荷（Session RPE × 时长；教练日摘要用） ———
+model InjuryPainLog {
+  id                     String   @id @default(cuid())
+  caseId                 String
+  date                   DateTime @db.Date
+  painScore              Int
+  painExerciseRelations  String[]
+  note                   String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  injuryCase InjuryCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, date])
+}
+
+model InjuryNoteRecord {
+  id        String         @id @default(cuid())
+  caseId    String
+  kind      InjuryNoteKind
+  date      DateTime       @db.Date
+  content   String
+  createdAt DateTime       @default(now())
+
+  injuryCase InjuryCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, kind])
+}
+
+// ——— 训后主观负荷（Session RPE × 时长；同日可多条） ———
 
 model SessionFeedback {
-  id            String    @id @default(cuid())
+  id            String       @id @default(cuid())
   playerId      String
-  schemaVersion Int       @default(1)
-  date          DateTime  @db.Date
+  schemaVersion Int          @default(2)
+  date          DateTime     @db.Date
+  activityType  ActivityType @default(other)
   sessionRpe    Int
   durationMin   Int
-  hasPain       Boolean   @default(false)
-  painArea      PainArea?
+  /// RPE × 分钟
+  sessionLoad   Int
   note          String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-  @@unique([playerId, date])
-  @@index([playerId, date])
-}
-
-// ——— 上场可用性（仅运动损伤模块写入；与 Readiness 解耦） ———
-
-model AvailabilityCheck {
-  id            String             @id @default(cuid())
-  playerId      String
-  schemaVersion Int                @default(1)
-  date          DateTime           @db.Date
-  status        AvailabilityStatus
-  painArea      PainArea?
-  painScore     Int                @default(0)
-  symptom       String?
-  probeFeedback ProbeFeedback?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
-
-  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
-
-  @@unique([playerId, date])
   @@index([playerId, date])
 }

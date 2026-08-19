@@ -20,7 +20,7 @@ import {
   type RedsEvaluation,
 } from "@/lib/clinical/redsWatch";
 import type { CycleProfileDto } from "@/lib/cycleTypes";
-import type { SleepQuality } from "@/lib/readinessHistory";
+import { scale5ToWorse10 } from "@/lib/clinical/preDimensions";
 
 export type CycleSymptomInput = {
   crampsScore: number;
@@ -49,9 +49,10 @@ export function buildCycleAssessmentBundle(input: {
   profile: CycleProfileDto | null;
   periodStartDate: string;
   symptoms: CycleSymptomInput;
+  /** 五维 1–5，高分更好 */
   fatigueScore: number;
   sorenessScore: number;
-  recentSleep: SleepQuality[];
+  recentSleep: number[];
   recentFatigue: number[];
 }): CycleAssessmentBundle {
   const empty: CycleAssessmentBundle = {
@@ -85,30 +86,34 @@ export function buildCycleAssessmentBundle(input: {
     periodStartDate || profile.lastPeriodStart,
     profile.resolvedLengthDays
   );
+  const fatigueWorse = scale5ToWorse10(input.fatigueScore);
+  const sorenessWorse = scale5ToWorse10(input.sorenessScore);
+  const recentFatigueWorse = input.recentFatigue.map(scale5ToWorse10);
   const badSleepRatio =
     input.recentSleep.length === 0
       ? null
-      : input.recentSleep.filter((s) => s === "bad").length /
+      : input.recentSleep.filter((s) => s <= 2).length /
         input.recentSleep.length;
 
   const reds = evaluateRedsSignals({
     selfReportedIrregular: symptoms.cycleIrregular,
     missedExpectedPeriods: missed,
-    avgFatigue30d: avg(input.recentFatigue),
+    avgFatigue30d: avg(recentFatigueWorse),
     badSleepRatio30d: badSleepRatio,
     bodyImageAnxietyOptIn: profile.bodyImageAnxietyOptIn,
   });
 
   const loadTag = resolvePhysiologicalLoadTag({
     phase,
-    fatigueScore: input.fatigueScore,
-    sorenessScore: input.sorenessScore,
+    fatigueScore: fatigueWorse,
+    sorenessScore: sorenessWorse,
     crampsScore: symptoms.crampsScore,
     redsTriggered: reds.triggered,
   });
 
   const symptomOnly = !phase || hidePhaseLabels || phase.confidence === "low";
-  const penalty = getFemaleCyclePenalty(phase, input.fatigueScore, {
+  // 扣分仅保留给历史兼容；象限路径不再使用
+  const penalty = getFemaleCyclePenalty(phase, fatigueWorse, {
     crampsScore: symptoms.crampsScore,
     symptomOnly,
   });

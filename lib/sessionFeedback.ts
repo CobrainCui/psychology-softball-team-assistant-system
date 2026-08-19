@@ -1,10 +1,14 @@
-// 训后反馈本地草稿：云端失败时降级；权威源为 SessionFeedback 表。
+// 训后反馈本地草稿：云端失败时降级；权威源为 SessionFeedback 表。同日可多条。
 
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { safeParseJSON } from "@/lib/safeParse";
-import { isPainArea, type PainArea } from "@/lib/clinical/painAreas";
+import {
+  computeSessionLoad,
+  isActivityType,
+  type ActivityType,
+} from "@/lib/clinical/activityTypes";
 
-export const SESSION_FEEDBACK_SCHEMA_VERSION = 1;
+export const SESSION_FEEDBACK_SCHEMA_VERSION = 2;
 
 export interface SessionFeedbackEntry {
   schemaVersion: number;
@@ -12,10 +16,10 @@ export interface SessionFeedbackEntry {
   playerId: string;
   playerName: string;
   date: string;
+  activityType: ActivityType;
   sessionRpe: number;
   durationMin: number;
-  hasPain: boolean;
-  painArea: PainArea | null;
+  sessionLoad: number;
   note: string | null;
   timestamp: number;
 }
@@ -40,15 +44,22 @@ export function loadSessionFeedbackDrafts(): SessionFeedbackEntry[] {
   if (!Array.isArray(parsed)) return [];
   return parsed.filter(isSessionFeedbackEntry).map((entry) => ({
     ...entry,
-    painArea: isPainArea(entry.painArea) ? entry.painArea : null,
+    activityType: isActivityType(entry.activityType)
+      ? entry.activityType
+      : "other",
+    sessionLoad:
+      typeof entry.sessionLoad === "number"
+        ? entry.sessionLoad
+        : computeSessionLoad(entry.sessionRpe, entry.durationMin),
     note: typeof entry.note === "string" ? entry.note : null,
   }));
 }
 
-export function upsertSessionFeedbackDraft(
-  entry: Omit<SessionFeedbackEntry, "schemaVersion" | "id" | "timestamp"> & {
+export function appendSessionFeedbackDraft(
+  entry: Omit<SessionFeedbackEntry, "schemaVersion" | "id" | "timestamp" | "sessionLoad"> & {
     id?: string;
     timestamp?: number;
+    sessionLoad?: number;
   }
 ): SessionFeedbackEntry {
   const full: SessionFeedbackEntry = {
@@ -57,16 +68,16 @@ export function upsertSessionFeedbackDraft(
     playerId: entry.playerId,
     playerName: entry.playerName,
     date: entry.date,
+    activityType: entry.activityType,
     sessionRpe: entry.sessionRpe,
     durationMin: entry.durationMin,
-    hasPain: entry.hasPain,
-    painArea: entry.painArea,
+    sessionLoad:
+      entry.sessionLoad ??
+      computeSessionLoad(entry.sessionRpe, entry.durationMin),
     note: entry.note,
     timestamp: entry.timestamp ?? Date.now(),
   };
-  const existing = loadSessionFeedbackDrafts().filter(
-    (item) => !(item.playerId === full.playerId && item.date === full.date)
-  );
+  const existing = loadSessionFeedbackDrafts();
   localStorage.setItem(
     STORAGE_KEYS.sessionFeedback,
     JSON.stringify([...existing, full])

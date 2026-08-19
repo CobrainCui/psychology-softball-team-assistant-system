@@ -1,14 +1,14 @@
 /**
- * Dual-track UI verification. Injects session to avoid login/getPlayers hangs.
+ * Status / injury UI verification. Injects session to avoid login hangs.
  * BASE_URL=http://localhost:3000 npx tsx scripts/verify-ui.ts
  */
 import { chromium, type Page } from "playwright";
 import { writeFileSync } from "fs";
 import {
-  computeReadiness,
-  loadBandFromScore,
-} from "../lib/clinical/readinessScore";
-import { deriveAvailabilityStatus } from "../lib/clinical/availabilityStatus";
+  buildPreFeedback,
+  computePhysicalBattery,
+  resolveQuadrant,
+} from "../lib/clinical/preQuadrant";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 const PLAYER_ID =
@@ -56,73 +56,31 @@ async function checkAssessment(page: Page) {
   if (/运动损伤/.test(body)) pass("assessment guides to 运动损伤");
   else fail("assessment missing 运动损伤 guide");
 
-  if (/新发伤病|历史伤病追踪|疼痛部位/.test(body)) {
-    fail("assessment still shows injury/probe UI");
+  if (/新发伤病|历史伤病追踪|疼痛部位|上场可用性|\/\s*100|满负荷|Hooper/.test(body)) {
+    fail("assessment still shows old score/injury UI");
   } else {
-    pass("assessment has no injury/probe UI");
+    pass("assessment has no old score/injury UI");
   }
 
   const ranges = page.locator('main input[type="range"]');
   const count = await ranges.count();
   info(`assessment range inputs: ${count}`);
+  if (count >= 5) pass("assessment has five wellness sliders");
+  else fail(`assessment slider count ${count} < 5`);
 
   page.on("dialog", async (d) => {
     info(`alert: ${d.message()}`);
     await d.accept();
   });
 
-  if (count >= 3) {
-    await ranges.nth(0).fill("3");
-    await ranges.nth(1).fill("5");
-    await ranges.nth(2).fill("3");
-  }
-
-  await page.getByRole("button", { name: /生成今日体能负荷建议/ }).click();
+  await page.getByRole("button", { name: /生成今日四象限反馈/ }).click();
   await page.waitForTimeout(3500);
-
-  let after = await page.locator("main").innerText();
-  const score5 = after.match(/(\d+)\s*\/\s*100/);
-  if (score5) pass(`fatigue5 score rendered: ${score5[1]}/100`);
-  else fail("no readiness score after generate (fatigue5)");
-
-  if (/负荷带|满负荷|可训|技术为主|明显减量|恢复课/.test(after)) {
-    pass("load band label present after generate");
-  } else fail("load band label missing");
-
-  const expected5 = computeReadiness({
-    sleepQuality: "normal",
-    stressScore: 3,
-    fatigueScore: 5,
-    sorenessScore: 3,
-  });
-  if (score5 && Number(score5[1]) === expected5.readinessScore) {
-    pass(
-      `UI score matches computeReadiness for fatigue5 (=${expected5.readinessScore}, ${expected5.loadBand.id})`
-    );
-  } else {
-    fail(
-      `UI score ${score5?.[1]} != expected ${expected5.readinessScore} (may include cycle penalty)`
-    );
-  }
-
-  const breakdownBtn = page.getByRole("button", { name: /展开维度明细/ });
-  if (await breakdownBtn.count()) {
-    await breakdownBtn.click();
-    after = await page.locator("main").innerText();
-    if (/Hooper/.test(after)) pass("dimension breakdown shows Hooper");
-    else fail("breakdown missing Hooper");
-  } else fail("expand breakdown button missing");
-
-  if (count >= 3) await ranges.nth(1).fill("8");
-  await page.getByRole("button", { name: /生成今日体能负荷建议/ }).click();
-  await page.waitForTimeout(3500);
-  after = await page.locator("main").innerText();
-  const score8 = after.match(/(\d+)\s*\/\s*100/);
-  if (score5 && score8 && score5[1] !== score8[1]) {
-    pass(`fatigue 5→8 changes score ${score5[1]} → ${score8[1]}`);
-  } else {
-    fail(`fatigue 5 vs 8 same/missing (${score5?.[1]} / ${score8?.[1]})`);
-  }
+  const after = await page.locator("main").innerText();
+  if (/\/\s*100/.test(after)) fail("assessment still shows / 100");
+  else pass("assessment has no / 100 after generate");
+  if (/身体准备好了|身心都在说|心里很想动|身体和动力/.test(after)) {
+    pass("quadrant title rendered");
+  } else fail("quadrant title missing after generate");
 }
 
 async function checkPrehab(page: Page) {
@@ -130,37 +88,20 @@ async function checkPrehab(page: Page) {
   await page.waitForSelector("main h1", { timeout: 30000 });
   await page.waitForTimeout(1500);
   const main = page.locator("main");
-
   if (/运动损伤/.test(await main.innerText())) pass("prehab title 运动损伤");
   else fail("prehab title missing");
 
   for (const tab of ["监控", "伤后建议", "预防"]) {
     const btn = page.getByRole("button", { name: tab, exact: true });
-    if (await btn.count()) {
-      await btn.click();
-      await page.waitForTimeout(400);
-      pass(`tab clickable: ${tab}`);
-    } else fail(`tab missing: ${tab}`);
+    if (await btn.count()) fail(`old tab still present: ${tab}`);
+    else pass(`old tab gone: ${tab}`);
   }
-
-  await page.getByRole("button", { name: "预防", exact: true }).click();
-  if (/内容建设中|仅占位/.test(await main.innerText())) {
-    pass("prevent is placeholder only");
-  } else fail("prevent placeholder copy missing");
-
-  await page.getByRole("button", { name: "伤后建议", exact: true }).click();
-  const range = page.locator('main input[type="range"]').first();
-  if (await range.count()) await range.fill("4");
-  await page.getByRole("button", { name: /生成伤后建议与可用性/ }).click();
-  await page.waitForTimeout(1000);
-  const advice = await main.innerText();
-  const expectAvail = deriveAvailabilityStatus({ painScore: 4 });
-  if (expectAvail === "modified" && /限制性可用|可用性/.test(advice)) {
-    pass("VAS4 advice shows modified availability");
-  } else if (/可用性|完全可用|伤缺|限制性可用/.test(advice)) {
-    info(`advice availability text present (raw expect=${expectAvail})`);
-    pass("advice shows availability section");
-  } else fail("advice missing availability");
+  if (await page.getByRole("button", { name: /新建损伤记录/ }).count()) {
+    pass("new case button present");
+  } else fail("new case button missing");
+  if (/上场可用性|限制性可用|伤缺/.test(await main.innerText())) {
+    fail("prehab still shows availability");
+  } else pass("prehab has no availability copy");
 }
 
 async function checkProfile(page: Page) {
@@ -168,10 +109,10 @@ async function checkProfile(page: Page) {
   await page.waitForSelector("main", { timeout: 30000 });
   await page.waitForTimeout(2000);
   const text = await page.locator("main").innerText();
-  if (/体能准备度/.test(text)) pass("profile shows 体能准备度");
-  else fail("profile missing 体能准备度");
-  if (/上场可用性/.test(text)) pass("profile shows 上场可用性");
-  else fail("profile missing 上场可用性");
+  if (/最近象限/.test(text)) pass("profile shows 最近象限");
+  else fail("profile missing 最近象限");
+  if (/上场可用性/.test(text)) fail("profile still shows 上场可用性");
+  else pass("profile has no 上场可用性");
   if (/伤病预防/.test(text)) fail("profile still says 伤病预防");
   else pass("profile has no 伤病预防 copy");
 }
@@ -187,48 +128,40 @@ async function checkNav(page: Page) {
 }
 
 function checkCalcOffline() {
-  const f5 = computeReadiness({
-    sleepQuality: "normal",
-    stressScore: 3,
-    fatigueScore: 5,
-    sorenessScore: 3,
-  });
-  const f8 = computeReadiness({
-    sleepQuality: "normal",
-    stressScore: 3,
-    fatigueScore: 8,
-    sorenessScore: 3,
-  });
-  if (f5.readinessScore === 63 && f5.loadBand.id === "modified_70") {
-    pass("calc fatigue5 → 63 / modified_70");
-  } else fail(`calc fatigue5 unexpected ${f5.readinessScore} ${f5.loadBand.id}`);
-  if (f8.readinessScore === 54 && f8.loadBand.id === "modified_50") {
-    pass("calc fatigue8 → 54 / modified_50");
-  } else fail(`calc fatigue8 unexpected ${f8.readinessScore} ${f8.loadBand.id}`);
+  const peak = resolveQuadrant(4, 4);
+  const slack = resolveQuadrant(4, 2);
+  const fatigue = resolveQuadrant(2.5, 1);
+  const risk = resolveQuadrant(2.5, 4);
+  if (peak === "peak") pass("quadrant 4,4 → peak");
+  else fail(`quadrant 4,4 → ${peak}`);
+  if (slack === "slack") pass("quadrant 4,2 → slack");
+  else fail(`quadrant 4,2 → ${slack}`);
+  if (fatigue === "real_fatigue") pass("quadrant 2.5,1 → real_fatigue");
+  else fail(`quadrant 2.5,1 → ${fatigue}`);
+  if (risk === "injury_risk") pass("quadrant 2.5,4 → injury_risk");
+  else fail(`quadrant 2.5,4 → ${risk}`);
 
-  const cases: [number, string][] = [
-    [90, "full_100"],
-    [89, "full_85"],
-    [74, "modified_70"],
-    [59, "modified_50"],
-    [44, "rest_energy"],
-  ];
-  for (const [s, id] of cases) {
-    if (loadBandFromScore(s).id === id) pass(`band ${s}→${id}`);
-    else fail(`band ${s}→${loadBandFromScore(s).id} want ${id}`);
-  }
+  const battery = computePhysicalBattery({
+    sleep: 3,
+    stress: 3,
+    fatigue: 3,
+    soreness: 3,
+    willingness: 3,
+  });
+  if (battery === 3) pass("battery all-3 → 3");
+  else fail(`battery all-3 → ${battery}`);
 
-  if (deriveAvailabilityStatus({ painScore: 2 }) === "full") pass("avail vas2 full");
-  else fail("avail vas2");
-  if (deriveAvailabilityStatus({ painScore: 4 }) === "modified")
-    pass("avail vas4 modified");
-  else fail("avail vas4");
-  if (deriveAvailabilityStatus({ painScore: 6 }) === "unavailable")
-    pass("avail vas6 unavailable");
-  else fail("avail vas6");
-  if (deriveAvailabilityStatus({ painScore: 2, probeFeedback: "C" }) === "unavailable")
-    pass("avail probeC unavailable");
-  else fail("avail probeC");
+  const fb = buildPreFeedback({
+    input: {
+      sleep: 5,
+      stress: 5,
+      fatigue: 5,
+      soreness: 5,
+      willingness: 5,
+    },
+  });
+  if (fb.quadrant === "peak") pass("all-5 feedback peak");
+  else fail(`all-5 feedback ${fb.quadrant}`);
 }
 
 async function main() {

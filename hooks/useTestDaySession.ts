@@ -4,12 +4,19 @@ import { useEffect, useState } from "react";
 import { type Player } from "@/lib/players";
 import { loginOrRegister } from "@/lib/actions";
 import {
+  type FlyCatchAttempt,
   type HitQuality,
   type HitRecord,
   type HitResult,
+  type PitchCall,
   type PitchType,
   type SpeedRecord,
+  type StrikeJudgeCell,
+  type StrikeJudgeColumn,
+  type ThrowPlay,
+  type ThrowTestItem,
 } from "@/lib/gameArchive";
+import { playersAssignedTo } from "@/lib/testDay/rosterHelpers";
 import {
   type Assignments,
   clearSessionDraft,
@@ -49,6 +56,19 @@ export function useTestDaySession() {
   const [customTestName, setCustomTestName] = useState("");
   const [speedRecords, setSpeedRecords] = useState<SpeedRecord[]>([]);
   const [speedInputs, setSpeedInputs] = useState<SpeedInputs>({});
+  const [flyCatchAttempts, setFlyCatchAttempts] = useState<FlyCatchAttempt[]>(
+    []
+  );
+  const [flyCatchNoteDrafts, setFlyCatchNoteDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [strikeJudgeColumns, setStrikeJudgeColumns] = useState<
+    StrikeJudgeColumn[]
+  >([]);
+  const [strikeJudgeCells, setStrikeJudgeCells] = useState<StrikeJudgeCell[]>(
+    []
+  );
+  const [throwPlays, setThrowPlays] = useState<ThrowPlay[]>([]);
 
   // 名册由 app/page.tsx 通过 getPlayers() 注入；此处只恢复当场草稿
   useEffect(() => {
@@ -57,6 +77,10 @@ export function useTestDaySession() {
     setSpeedRecords(draft.speedRecords);
     setAssignments(draft.assignments);
     setTestItems(draft.testItems);
+    setFlyCatchAttempts(draft.flyCatchAttempts);
+    setStrikeJudgeColumns(draft.strikeJudgeColumns);
+    setStrikeJudgeCells(draft.strikeJudgeCells);
+    setThrowPlays(draft.throwPlays);
     setIsMounted(true);
   }, []);
 
@@ -68,19 +92,44 @@ export function useTestDaySession() {
       speedRecords,
       assignments,
       testItems,
+      flyCatchAttempts,
+      strikeJudgeColumns,
+      strikeJudgeCells,
+      throwPlays,
     });
-  }, [hits, speedRecords, assignments, testItems, isMounted]);
+  }, [
+    hits,
+    speedRecords,
+    assignments,
+    testItems,
+    flyCatchAttempts,
+    strikeJudgeColumns,
+    strikeJudgeCells,
+    throwPlays,
+    isMounted,
+  ]);
 
   const currentBatter = players.find((player) => player.id === currentBatterId);
   const batterHits = hits.filter((hit) => hit.playerId === currentBatterId);
   const isEntryPanelActive = currentResult === "MISS" || pendingHit !== null;
   const showPitchQualityPanel = currentResult !== "MISS" && pendingHit !== null;
   const plottableHits = batterHits.filter((hit) => hit.result !== "MISS");
-  const speedTestAssignedPlayers = players.filter((player) =>
-    assignments[player.id]?.includes("上垒速度")
+  const speedTestAssignedPlayers = playersAssignedTo(
+    "上垒速度",
+    players,
+    assignments
   );
+  const flyCatchAssignedPlayers = playersAssignedTo(
+    "接高飞",
+    players,
+    assignments
+  );
+  const strikeJudgePlayers = playersAssignedTo("好球判断", players, assignments);
+  const pitcherPlayers = playersAssignedTo("投手", players, assignments);
+  const firstBasePlayers = playersAssignedTo("一垒", players, assignments);
+  const throw63Players = playersAssignedTo("6-3传球", players, assignments);
+  const throw43Players = playersAssignedTo("4-3传球", players, assignments);
 
-  // 点击坐标 → 相对百分比 → 写入 pendingHit，不直接落库
   const handleFieldClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (currentResult === "MISS") return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -130,12 +179,12 @@ export function useTestDaySession() {
     });
   };
 
-  // 推导步骤：该队员是否已勾满全部测试 → 是则清空，否则全选
   const handleSelectAllTestsForPlayer = (playerId: string) => {
     setAssignments((prev) => {
       const current = prev[playerId] ?? [];
       const allSelected =
-        testItems.length > 0 && testItems.every((item) => current.includes(item));
+        testItems.length > 0 &&
+        testItems.every((item) => current.includes(item));
       return {
         ...prev,
         [playerId]: allSelected ? [] : [...testItems],
@@ -143,7 +192,6 @@ export function useTestDaySession() {
     });
   };
 
-  // 推导步骤：该测试是否已对全部队员勾选 → 是则全员取消，否则全员勾选
   const handleSelectAllPlayersForTest = (testItem: string) => {
     setAssignments((prev) => {
       const allSelected =
@@ -216,6 +264,149 @@ export function useTestDaySession() {
     ]);
   };
 
+  const handleFlyCatchNoteDraftChange = (playerId: string, value: string) => {
+    setFlyCatchNoteDrafts((prev) => ({ ...prev, [playerId]: value }));
+  };
+
+  const handleRecordFlyCatch = (
+    playerId: string,
+    playerName: string,
+    caught: boolean
+  ) => {
+    const note = flyCatchNoteDrafts[playerId]?.trim();
+    setFlyCatchAttempts((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        playerId,
+        playerName,
+        caught,
+        note: note || undefined,
+        timestamp: Date.now(),
+      },
+    ]);
+  };
+
+  const handleUndoFlyCatch = (playerId: string) => {
+    setFlyCatchAttempts((prev) => {
+      const lastIndex = prev.findLastIndex((row) => row.playerId === playerId);
+      if (lastIndex === -1) return prev;
+      return prev.filter((_, index) => index !== lastIndex);
+    });
+  };
+
+  const handleAddStrikeJudgeColumn = (
+    pitcherId: string,
+    pitcherName: string
+  ) => {
+    setStrikeJudgeColumns((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        pitcherId,
+        pitcherName,
+        sortOrder: prev.length,
+      },
+    ]);
+  };
+
+  const handleInitStrikeJudgeColumns = () => {
+    setStrikeJudgeColumns(
+      pitcherPlayers.map((player, index) => ({
+        id: crypto.randomUUID(),
+        pitcherId: player.id,
+        pitcherName: player.name,
+        sortOrder: index,
+      }))
+    );
+  };
+
+  const handleReorderStrikeJudgeColumns = (
+    fromIndex: number,
+    toIndex: number
+  ) => {
+    setStrikeJudgeColumns((prev) => {
+      const sorted = [...prev].sort((a, b) => a.sortOrder - b.sortOrder);
+      if (
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= sorted.length ||
+        toIndex >= sorted.length
+      ) {
+        return prev;
+      }
+      const [moved] = sorted.splice(fromIndex, 1);
+      sorted.splice(toIndex, 0, moved);
+      return sorted.map((column, index) => ({ ...column, sortOrder: index }));
+    });
+  };
+
+  const handleUpsertStrikeJudgeCell = (
+    columnId: string,
+    judgeId: string,
+    judgeName: string,
+    pitchCall: PitchCall,
+    swung: boolean
+  ) => {
+    setStrikeJudgeCells((prev) => {
+      const existingIndex = prev.findIndex(
+        (cell) => cell.columnId === columnId && cell.judgeId === judgeId
+      );
+      const nextCell: StrikeJudgeCell = {
+        columnId,
+        judgeId,
+        judgeName,
+        pitchCall,
+        swung,
+        timestamp: Date.now(),
+      };
+      if (existingIndex === -1) return [...prev, nextCell];
+      const next = [...prev];
+      next[existingIndex] = nextCell;
+      return next;
+    });
+  };
+
+  const handleClearStrikeJudgeCell = (columnId: string, judgeId: string) => {
+    setStrikeJudgeCells((prev) =>
+      prev.filter(
+        (cell) => !(cell.columnId === columnId && cell.judgeId === judgeId)
+      )
+    );
+  };
+
+  const handleUpsertThrowPlay = (play: ThrowPlay) => {
+    setThrowPlays((prev) => {
+      const index = prev.findIndex(
+        (row) =>
+          row.testItem === play.testItem &&
+          row.throwerId === play.throwerId &&
+          row.firstBaseId === play.firstBaseId
+      );
+      if (index === -1) return [...prev, play];
+      const next = [...prev];
+      next[index] = play;
+      return next;
+    });
+  };
+
+  const handleClearThrowPlay = (
+    testItem: ThrowTestItem,
+    throwerId: string,
+    firstBaseId: string
+  ) => {
+    setThrowPlays((prev) =>
+      prev.filter(
+        (play) =>
+          !(
+            play.testItem === testItem &&
+            play.throwerId === throwerId &&
+            play.firstBaseId === firstBaseId
+          )
+      )
+    );
+  };
+
   const handleAddCustomTest = () => {
     const trimmedName = customTestName.trim();
     if (!trimmedName) return;
@@ -249,7 +440,6 @@ export function useTestDaySession() {
     const name = window.prompt("请输入新队员名字:");
     if (!name || !name.trim()) return;
 
-    // 性别必填：与 CurrentUser / 状态评估女性通道契约对齐，避免无名册性别
     const genderRaw = window.prompt("请输入性别（男 / 女）:", "女");
     if (!genderRaw) return;
     const normalized = genderRaw.trim();
@@ -274,11 +464,15 @@ export function useTestDaySession() {
     setCurrentBatterId(res.player.id);
   };
 
-  // 交卷成功后由 page 调用：清空盘面与草稿（不碰排阵/录入逻辑）
   const clearBoardAfterArchive = () => {
     setHits([]);
     setSpeedRecords([]);
     setSpeedInputs({});
+    setFlyCatchAttempts([]);
+    setFlyCatchNoteDrafts({});
+    setStrikeJudgeColumns([]);
+    setStrikeJudgeCells([]);
+    setThrowPlays([]);
     setAssignments({});
     setPendingHit(null);
     clearSessionDraft();
@@ -291,6 +485,11 @@ export function useTestDaySession() {
     hits,
     speedRecords,
     speedInputs,
+    flyCatchAttempts,
+    flyCatchNoteDrafts,
+    strikeJudgeColumns,
+    strikeJudgeCells,
+    throwPlays,
     assignments,
     testItems,
     customTestName,
@@ -312,6 +511,12 @@ export function useTestDaySession() {
     isEntryPanelActive,
     showPitchQualityPanel,
     speedTestAssignedPlayers,
+    flyCatchAssignedPlayers,
+    strikeJudgePlayers,
+    pitcherPlayers,
+    firstBasePlayers,
+    throw63Players,
+    throw43Players,
     handleFieldClick,
     handleConfirmHit,
     handleSelectResult,
@@ -322,6 +527,16 @@ export function useTestDaySession() {
     handleSelectAllPlayersForTest,
     handleSpeedInputChange,
     handleRecordSpeed,
+    handleFlyCatchNoteDraftChange,
+    handleRecordFlyCatch,
+    handleUndoFlyCatch,
+    handleAddStrikeJudgeColumn,
+    handleInitStrikeJudgeColumns,
+    handleReorderStrikeJudgeColumns,
+    handleUpsertStrikeJudgeCell,
+    handleClearStrikeJudgeCell,
+    handleUpsertThrowPlay,
+    handleClearThrowPlay,
     handleAddCustomTest,
     handleUndo,
     handleClearAll,

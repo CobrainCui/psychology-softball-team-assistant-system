@@ -28,10 +28,10 @@ npx prisma studio
 | Prisma | 前端 / 存储 |
 |--------|-------------|
 | `Team` + `Player` | `lib/players.ts` |
-| `TestSession` + `Hit` + `SpeedRecord` | `lib/gameArchive.ts` |
-| `ReadinessCheck` | `lib/readinessHistory.ts`（含 sleep/stress/fatigue/soreness） |
-| `InjuryLog` | `lib/injuryLog.ts` + `saveInjuryLog` / 档案聚合 |
-| `SessionFeedback` | `lib/sessionFeedback.ts` + `/feedback` → 教练摘要 |
+| `TestSession` + `Hit` + `SpeedRecord` + 技能表 | `lib/gameArchive.ts` |
+| `ReadinessCheck` | `lib/readinessHistory.ts`（五维 1–5 + 四象限） |
+| `InjuryCase` | `lib/injuryCases.ts` + `createInjuryCase` / 档案聚合 |
+| `SessionFeedback` | `lib/sessionFeedback.ts` + `/feedback` → 教练摘要（同日可多条） |
 
 `Player.role`：`player` | `coach`（P0 极简身份）
 

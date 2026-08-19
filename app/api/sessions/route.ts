@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { ensureDefaultTeam } from "@/lib/ensureTeam";
-import { GAME_ARCHIVE_SCHEMA_VERSION } from "@/lib/gameArchive";
 import {
-  asHitQuality,
-  asHitResult,
-  asPitchType,
+  sessionArchiveInclude,
   sessionToGameArchive,
 } from "@/lib/sessionMapper";
+import {
+  collectSessionArchivePlayerIds,
+  normalizeSessionArchivePayload,
+  sessionArchiveHasContent,
+  type SessionArchivePayload,
+} from "@/lib/testDay/archiveValidation";
+import { buildTestSessionCreateInput } from "@/lib/testDay/sessionArchiveWrite";
 
 export async function GET() {
   try {
@@ -15,12 +19,7 @@ export async function GET() {
     const sessions = await prisma.testSession.findMany({
       where: { teamId: team.id },
       orderBy: { archivedAt: "asc" },
-      include: {
-        hits: { include: { player: { select: { id: true, name: true } } } },
-        speedRecords: {
-          include: { player: { select: { id: true, name: true } } },
-        },
-      },
+      include: sessionArchiveInclude,
     });
     return NextResponse.json(sessions.map(sessionToGameArchive));
   } catch (error) {
@@ -35,93 +34,16 @@ export async function POST(request: Request) {
     if (!body || typeof body !== "object") {
       return NextResponse.json({ error: "无效请求体" }, { status: 400 });
     }
-    const obj = body as Record<string, unknown>;
-    const hitsRaw = Array.isArray(obj.hits) ? obj.hits : [];
-    const speedRaw = Array.isArray(obj.speedRecords) ? obj.speedRecords : [];
 
-    if (hitsRaw.length === 0 && speedRaw.length === 0) {
-      return NextResponse.json(
-        { error: "归档内容为空" },
-        { status: 400 }
-      );
-    }
+    const payload = body as SessionArchivePayload;
+    const data = normalizeSessionArchivePayload(payload);
 
-    // 推导步骤：校验枚举与 playerId → 事务写入 TestSession + Hit + SpeedRecord
-    const hitRows: {
-      playerId: string;
-      result: NonNullable<ReturnType<typeof asHitResult>>;
-      x: number | null;
-      y: number | null;
-      pitchType: ReturnType<typeof asPitchType>;
-      hitQuality: ReturnType<typeof asHitQuality>;
-      recordedAt: Date;
-    }[] = [];
-
-    for (const item of hitsRaw) {
-      if (!item || typeof item !== "object") {
-        return NextResponse.json({ error: "打点记录无效" }, { status: 400 });
-      }
-      const hit = item as Record<string, unknown>;
-      const result = asHitResult(hit.result);
-      if (typeof hit.playerId !== "string" || !result) {
-        return NextResponse.json({ error: "打点缺 playerId/result" }, { status: 400 });
-      }
-      const ts =
-        typeof hit.timestamp === "number" && Number.isFinite(hit.timestamp)
-          ? hit.timestamp
-          : Date.now();
-      hitRows.push({
-        playerId: hit.playerId,
-        result,
-        x: typeof hit.x === "number" ? hit.x : null,
-        y: typeof hit.y === "number" ? hit.y : null,
-        pitchType: asPitchType(hit.pitchType),
-        hitQuality: asHitQuality(hit.hitQuality),
-        recordedAt: new Date(ts),
-      });
-    }
-
-    const speedRows: {
-      playerId: string;
-      firstBaseSeconds: number | null;
-      secondBaseSeconds: number | null;
-      customSeconds: number | null;
-      recordedAt: Date;
-    }[] = [];
-
-    for (const item of speedRaw) {
-      if (!item || typeof item !== "object") {
-        return NextResponse.json({ error: "速度记录无效" }, { status: 400 });
-      }
-      const row = item as Record<string, unknown>;
-      if (typeof row.playerId !== "string") {
-        return NextResponse.json({ error: "速度缺 playerId" }, { status: 400 });
-      }
-      const ts =
-        typeof row.timestamp === "number" && Number.isFinite(row.timestamp)
-          ? row.timestamp
-          : Date.now();
-      speedRows.push({
-        playerId: row.playerId,
-        firstBaseSeconds:
-          typeof row.firstBaseSeconds === "number" ? row.firstBaseSeconds : null,
-        secondBaseSeconds:
-          typeof row.secondBaseSeconds === "number"
-            ? row.secondBaseSeconds
-            : null,
-        customSeconds:
-          typeof row.customSeconds === "number" ? row.customSeconds : null,
-        recordedAt: new Date(ts),
-      });
+    if (!sessionArchiveHasContent(data)) {
+      return NextResponse.json({ error: "归档内容为空" }, { status: 400 });
     }
 
     const team = await ensureDefaultTeam();
-    const playerIds = [
-      ...new Set([
-        ...hitRows.map((h) => h.playerId),
-        ...speedRows.map((s) => s.playerId),
-      ]),
-    ];
+    const playerIds = collectSessionArchivePlayerIds(data);
     const existing = await prisma.player.findMany({
       where: { teamId: team.id, id: { in: playerIds } },
       select: { id: true },
@@ -134,38 +56,11 @@ export async function POST(request: Request) {
     }
 
     const archivedAt = new Date();
+    const prismaData = buildTestSessionCreateInput(payload, team.id, archivedAt);
+
     const session = await prisma.testSession.create({
-      data: {
-        teamId: team.id,
-        schemaVersion: GAME_ARCHIVE_SCHEMA_VERSION,
-        archivedAt,
-        hits: {
-          create: hitRows.map((hit) => ({
-            playerId: hit.playerId,
-            result: hit.result,
-            x: hit.x,
-            y: hit.y,
-            pitchType: hit.pitchType,
-            hitQuality: hit.hitQuality,
-            recordedAt: hit.recordedAt,
-          })),
-        },
-        speedRecords: {
-          create: speedRows.map((row) => ({
-            playerId: row.playerId,
-            firstBaseSeconds: row.firstBaseSeconds,
-            secondBaseSeconds: row.secondBaseSeconds,
-            customSeconds: row.customSeconds,
-            recordedAt: row.recordedAt,
-          })),
-        },
-      },
-      include: {
-        hits: { include: { player: { select: { id: true, name: true } } } },
-        speedRecords: {
-          include: { player: { select: { id: true, name: true } } },
-        },
-      },
+      data: prismaData,
+      include: sessionArchiveInclude,
     });
 
     return NextResponse.json(sessionToGameArchive(session), { status: 201 });
