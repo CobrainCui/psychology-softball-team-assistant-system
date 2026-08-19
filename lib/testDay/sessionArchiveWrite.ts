@@ -15,6 +15,12 @@ import {
   normalizeSessionArchivePayload,
   type SessionArchivePayload,
 } from "@/lib/testDay/archiveValidation";
+import { Prisma } from "@/lib/generated/prisma/client";
+
+function toJsonField(value: unknown): Prisma.InputJsonValue | undefined {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
 
 function toFloatOrNull(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -29,7 +35,7 @@ export function buildTestSessionCreateInput(
   payload: SessionArchivePayload,
   teamId: string,
   archivedAt: Date
-) {
+): Prisma.TestSessionUncheckedCreateInput {
   const data = normalizeSessionArchivePayload(payload);
 
   const hitCreates = data.hits.map((hit, index) => {
@@ -182,9 +188,9 @@ export function buildTestSessionCreateInput(
     teamId,
     schemaVersion: GAME_ARCHIVE_SCHEMA_VERSION,
     archivedAt,
-    assignments: payload.assignments ?? undefined,
-    testItems: payload.testItems ?? undefined,
-    assignmentLog: payload.assignmentLog ?? undefined,
+    assignments: toJsonField(payload.assignments),
+    testItems: toJsonField(payload.testItems),
+    assignmentLog: toJsonField(payload.assignmentLog),
     hits: hitCreates.length > 0 ? { create: hitCreates } : undefined,
     speedRecords:
       speedCreates.length > 0 ? { create: speedCreates } : undefined,
