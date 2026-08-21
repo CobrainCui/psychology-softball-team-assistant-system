@@ -3,50 +3,63 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import MedicalDisclaimer from "@/components/MedicalDisclaimer";
+import PageLoading from "@/components/PageLoading";
 import { TeamQuadrantChart } from "@/components/status/TeamQuadrantChart";
 import {
   getCoachDaySummary,
   type CoachDaySummary,
-} from "@/lib/actions";
-import { getTodayDateStr } from "@/lib/readinessHistory";
+} from "@/lib/status/coachActions";
+import { getTodayDateStr } from "@/lib/dateOnly";
 import { useRequireAuth } from "@/lib/useRequireAuth";
+import SeasonReportCard from "@/components/season/SeasonReportCard";
 
 export default function CoachSummaryPage() {
   const { currentUser, isMounted } = useRequireAuth();
   const router = useRouter();
-  const [date, setDate] = useState(getTodayDateStr);
+  const [date, setDate] = useState("");
   const [summary, setSummary] = useState<CoachDaySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDate(getTodayDateStr());
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     if (!isMounted || !currentUser) return;
-    if (currentUser.role !== "coach") {
+    if (!currentUser.roles.includes("coach")) {
       router.replace("/assessment");
       return;
     }
+    if (!date) return;
     let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-    (async () => {
-      const res = await getCoachDaySummary(currentUser.playerId, date);
-      if (cancelled) return;
-      if (!res.success) {
-        console.error("云端被拒:", res.error);
-        setSummary(null);
-        setError(res.error);
-      } else {
-        setSummary(res.summary);
-      }
-      setIsLoading(false);
-    })();
+    const timer = window.setTimeout(() => {
+      setIsLoading(true);
+      setError(null);
+      void (async () => {
+        const res = await getCoachDaySummary(date);
+        if (cancelled) return;
+        if (!res.success) {
+          console.error("云端被拒:", res.error);
+          setSummary(null);
+          setError(res.error);
+        } else {
+          setSummary(res.summary);
+        }
+        setIsLoading(false);
+      })();
+    }, 0);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [isMounted, currentUser?.playerId, currentUser?.role, date, router]);
+  }, [isMounted, currentUser, date, router]);
 
-  if (!isMounted || !currentUser) return null;
-  if (currentUser.role !== "coach") return null;
+  if (!isMounted || !currentUser) return <PageLoading />;
+  if (!currentUser.roles.includes("coach")) return <PageLoading />;
 
   return (
     <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
@@ -60,6 +73,7 @@ export default function CoachSummaryPage() {
           </p>
         </div>
         <MedicalDisclaimer />
+        <SeasonReportCard mode="coach" />
         <div className="flex flex-col gap-2 border border-zinc-200 p-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex flex-col gap-1">
             <label className="text-xs uppercase text-gray-500">日期</label>
@@ -170,11 +184,6 @@ export default function CoachSummaryPage() {
                           {row.durationMin}min · 负荷 {row.sessionLoad}
                         </span>
                       </div>
-                      {row.note && (
-                        <p className="mt-1 text-xs text-zinc-600">
-                          「{row.note}」
-                        </p>
-                      )}
                     </li>
                   ))}
                 </ul>

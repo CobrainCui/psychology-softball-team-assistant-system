@@ -1,10 +1,21 @@
 // 综合测试日数据契约：写入端 (测试清单) 与读取端 (个人档案) 共用唯一类型与迁移。
 
-export const GAME_ARCHIVE_SCHEMA_VERSION = 3;
+import {
+  emptyCustomTestSlice,
+  parseCustomTestSlice,
+  type CustomTestSlice,
+} from "@/lib/testDay/customTests";
 
-export type HitResult = "LD" | "FB" | "GB" | "PU" | "MISS";
-export type PitchType = "FB" | "CB" | "SL" | "CH" | "OT";
-export type HitQuality = "Hard" | "Medium" | "Soft";
+export const GAME_ARCHIVE_SCHEMA_VERSION = 4;
+
+export const HIT_RESULT_VALUES = ["LD", "FB", "GB", "PU", "MISS"] as const;
+export type HitResult = (typeof HIT_RESULT_VALUES)[number];
+
+export const PITCH_TYPE_VALUES = ["FB", "CB", "SL", "CH", "OT"] as const;
+export type PitchType = (typeof PITCH_TYPE_VALUES)[number];
+
+export const HIT_QUALITY_VALUES = ["Hard", "Medium", "Soft"] as const;
+export type HitQuality = (typeof HIT_QUALITY_VALUES)[number];
 export type PitchCall = "strike" | "ball";
 export type ThrowBlame = "thrower" | "firstBase" | "both";
 export type ThrowTestItem = "6-3传球" | "4-3传球";
@@ -109,6 +120,10 @@ export interface GameArchive {
   strikeJudgeColumns: StrikeJudgeColumn[];
   strikeJudgeCells: StrikeJudgeCell[];
   throwPlays: ThrowPlay[];
+  customTestDefs: CustomTestSlice["customTestDefs"];
+  customPlayerNotes: CustomTestSlice["customPlayerNotes"];
+  customGroupNotes: CustomTestSlice["customGroupNotes"];
+  customSingleNotes: CustomTestSlice["customSingleNotes"];
   /** @deprecated 旧版打点字段，读取时由 migrate 归一到 hits */
   data?: HitRecord[];
 }
@@ -330,6 +345,7 @@ export function migrateGameArchive(raw: unknown): GameArchive | null {
     ),
     strikeJudgeCells: filterTyped(obj.strikeJudgeCells, isStrikeJudgeCell),
     throwPlays: filterTyped(obj.throwPlays, isThrowPlay),
+    ...parseCustomTestSlice(obj),
   };
 }
 
@@ -366,5 +382,6 @@ export function createGameArchive(
     strikeJudgeColumns: skills.strikeJudgeColumns,
     strikeJudgeCells: skills.strikeJudgeCells,
     throwPlays: skills.throwPlays,
+    ...emptyCustomTestSlice(),
   };
 }

@@ -15,6 +15,7 @@ import {
   normalizeSessionArchivePayload,
   type SessionArchivePayload,
 } from "@/lib/testDay/archiveValidation";
+import { compactCustomTestSliceForArchive } from "@/lib/testDay/customTests";
 import { Prisma } from "@/lib/generated/prisma/client";
 
 function toJsonField(value: unknown): Prisma.InputJsonValue | undefined {
@@ -191,6 +192,7 @@ export function buildTestSessionCreateInput(
     assignments: toJsonField(payload.assignments),
     testItems: toJsonField(payload.testItems),
     assignmentLog: toJsonField(payload.assignmentLog),
+    customTests: toJsonField(compactCustomTestSliceForArchive(data)),
     hits: hitCreates.length > 0 ? { create: hitCreates } : undefined,
     speedRecords:
       speedCreates.length > 0 ? { create: speedCreates } : undefined,

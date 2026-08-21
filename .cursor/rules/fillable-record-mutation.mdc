@@ -18,6 +18,7 @@ alwaysApply: true
 ## 例外
 
 - **经期 `period_start` 事件**：按事件列表改删，不套「事件日期必须是今天」。
+- **赛季协作数据**：`Season`、`ScheduleEvent`、`GameRecordFile`、未确认 `ConfirmedGameSummary` 按角色 / 状态机 / 文件所有权改删，允许提前录与赛后补，**不走** today-only。已确认摘要禁止静默覆盖。被当前确认摘要引用的源文件禁止普通删除。
 - **测试日一旦归档**：`TestSession` 及嵌套成绩只读，不提供归档后 PATCH/DELETE。
 - **不删名册**（`Player`）、不删 `CycleProfile` 整档。
 - 登录框、教练日期筛选、排阵勾选、同意开关不算「已保存业务记录」。

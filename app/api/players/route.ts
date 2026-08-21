@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { ensureDefaultTeam } from "@/lib/ensureTeam";
 import { normalizePlayerRole, type Gender } from "@/lib/players";
+import {
+  requireApiApproved,
+  requireApiArchiver,
+} from "@/lib/auth/apiGuard";
 
 function serializePlayer(player: {
   id: string;
@@ -19,9 +22,11 @@ function serializePlayer(player: {
 
 export async function GET() {
   try {
-    const team = await ensureDefaultTeam();
+    const gate = await requireApiApproved();
+    if (!gate.ok) return gate.response;
+
     const players = await prisma.player.findMany({
-      where: { teamId: team.id },
+      where: { teamId: gate.ctx.teamId },
       orderBy: { createdAt: "asc" },
     });
     return NextResponse.json(players.map(serializePlayer));
@@ -33,6 +38,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const gate = await requireApiArchiver();
+    if (!gate.ok) return gate.response;
+
     const body: unknown = await request.json();
     if (!body || typeof body !== "object") {
       return NextResponse.json({ error: "无效请求体" }, { status: 400 });
@@ -44,15 +52,13 @@ export async function POST(request: Request) {
     }
     const gender =
       obj.gender === "male" || obj.gender === "female" ? obj.gender : null;
-    const role = normalizePlayerRole(obj.role);
 
-    const team = await ensureDefaultTeam();
     const player = await prisma.player.create({
       data: {
-        teamId: team.id,
+        teamId: gate.ctx.teamId,
         name,
         gender,
-        role,
+        role: "player",
       },
     });
     return NextResponse.json(serializePlayer(player), { status: 201 });

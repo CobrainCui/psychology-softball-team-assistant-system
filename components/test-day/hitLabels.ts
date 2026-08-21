@@ -1,6 +1,7 @@
 import type { HitQuality, HitResult, PitchType } from "@/lib/gameArchive";
+import { HIT_RESULT_VALUES } from "@/lib/gameArchive";
 
-export const HIT_RESULTS: HitResult[] = ["LD", "FB", "GB", "PU", "MISS"];
+export const HIT_RESULTS: HitResult[] = [...HIT_RESULT_VALUES];
 
 export const HIT_RESULT_LABELS: Record<HitResult, string> = {
   LD: "LD | 平飞",

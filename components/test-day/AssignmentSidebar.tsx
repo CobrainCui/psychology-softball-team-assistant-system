@@ -1,11 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Player } from "@/lib/players";
 import type { Assignments } from "@/lib/sessionDraft";
-import type { AssignmentCommit } from "@/lib/testDay/assignmentLog";
+import {
+  buildAssignmentCommitDetailLines,
+  buildAssignmentCommitHeadline,
+  type AssignmentCommit,
+} from "@/lib/testDay/assignmentLog";
 import type { SidebarMode } from "@/hooks/useTestDaySession";
-import { useCurrentUser } from "@/lib/currentUser";
+import { useSession } from "@/lib/useSession";
+
+function formatCommitTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${month}月${day}日 ${hours}:${minutes}`;
+}
 
 interface AssignmentSidebarProps {
   players: Player[];
@@ -38,17 +52,21 @@ export default function AssignmentSidebar({
   onSaveAssignments,
   onBeginEditAssignments,
 }: AssignmentSidebarProps) {
-  const { currentUser, isMounted } = useCurrentUser();
+  const { user: currentUser } = useSession();
   const [author, setAuthor] = useState("");
   const [note, setNote] = useState("");
+  const [expandedLogIds, setExpandedLogIds] = useState<Record<string, boolean>>(
+    {}
+  );
 
-  useEffect(() => {
-    if (!isMounted || !currentUser?.playerName) return;
-    setAuthor((prev) => (prev.trim() ? prev : currentUser.playerName));
-  }, [isMounted, currentUser]);
+  const resolvedAuthor =
+    author.trim() ||
+    currentUser?.playerName ||
+    currentUser?.username ||
+    "";
 
   const handleSave = () => {
-    const ok = onSaveAssignments(author, note);
+    const ok = onSaveAssignments(resolvedAuthor, note);
     if (ok) setNote("");
   };
 
@@ -189,7 +207,7 @@ export default function AssignmentSidebar({
           </p>
           <input
             type="text"
-            value={author}
+            value={author || resolvedAuthor}
             onChange={(e) => setAuthor(e.target.value)}
             disabled={assignmentLocked}
             placeholder="修改人"
@@ -229,14 +247,57 @@ export default function AssignmentSidebar({
               修改记录
             </p>
             <ul className="flex max-h-48 flex-col gap-1.5 overflow-y-auto text-xs text-zinc-600">
-              {assignmentLog.map((entry) => (
-                <li
-                  key={entry.id}
-                  className="border border-zinc-200 bg-white px-2 py-1.5 leading-relaxed"
-                >
-                  {entry.summary}
-                </li>
-              ))}
+              {assignmentLog.map((entry, index) => {
+                const expanded = expandedLogIds[entry.id] === true;
+                const details = buildAssignmentCommitDetailLines({
+                  added: entry.added,
+                  removed: entry.removed,
+                  note: entry.note,
+                  players,
+                });
+                return (
+                  <li
+                    key={entry.id}
+                    className="border border-zinc-200 bg-white px-2 py-1.5"
+                  >
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      onClick={() =>
+                        setExpandedLogIds((prev) => ({
+                          ...prev,
+                          [entry.id]: !expanded,
+                        }))
+                      }
+                      className="flex w-full items-center gap-2 text-left"
+                    >
+                      <span className="min-w-0 flex-1 leading-relaxed">
+                        {buildAssignmentCommitHeadline(
+                          entry.author,
+                          index > 0
+                        )}
+                        <span className="ml-2 text-zinc-400">
+                          {formatCommitTime(entry.timestamp)}
+                        </span>
+                      </span>
+                      <span
+                        className={`inline-block shrink-0 text-[10px] leading-none text-zinc-500 transition-transform ${
+                          expanded ? "" : "-rotate-90"
+                        }`}
+                      >
+                        ▼
+                      </span>
+                    </button>
+                    {expanded && details.length > 0 ? (
+                      <ul className="mt-1.5 flex flex-col gap-0.5 border-t border-zinc-100 pt-1.5 text-zinc-500">
+                        {details.map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ) : null}

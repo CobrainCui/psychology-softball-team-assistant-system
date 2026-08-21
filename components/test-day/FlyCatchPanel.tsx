@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import type { FlyCatchAttempt } from "@/lib/gameArchive";
 import { RecordActions } from "@/components/records/RecordActions";
 
@@ -39,6 +38,49 @@ function ballLabel(n: number): string {
   return `第${chineseOrdinal(n)}球`;
 }
 
+function CatchButtons({
+  caughtLabel,
+  missedLabel,
+  onCaught,
+  onMissed,
+  undoDisabled,
+  onUndo,
+}: {
+  caughtLabel: string;
+  missedLabel: string;
+  onCaught: () => void;
+  onMissed: () => void;
+  undoDisabled: boolean;
+  onUndo: () => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onCaught}
+        className="flex-1 border border-zinc-900 bg-zinc-900 py-2 text-sm text-white hover:bg-zinc-800"
+      >
+        {caughtLabel}
+      </button>
+      <button
+        type="button"
+        onClick={onMissed}
+        className="flex-1 border border-zinc-300 py-2 text-sm text-zinc-700 hover:bg-zinc-100"
+      >
+        {missedLabel}
+      </button>
+      <button
+        type="button"
+        onClick={onUndo}
+        disabled={undoDisabled}
+        className="border border-zinc-300 px-3 py-2 text-xs text-zinc-600 hover:bg-zinc-100 disabled:text-zinc-400"
+      >
+        撤销上一球
+      </button>
+    </>
+  );
+}
+
 export default function FlyCatchPanel({
   assignedPlayers,
   attempts,
@@ -50,10 +92,6 @@ export default function FlyCatchPanel({
   onDeleteAttempt,
   onUndoLast,
 }: FlyCatchPanelProps) {
-  const [expandedByPlayer, setExpandedByPlayer] = useState<
-    Record<string, boolean>
-  >({});
-
   if (assignedPlayers.length === 0) {
     return (
       <p className="py-6 text-center text-sm text-zinc-400">
@@ -69,11 +107,10 @@ export default function FlyCatchPanel({
           (row) => row.playerId === player.id
         );
         const caughtCount = playerAttempts.filter((row) => row.caught).length;
-        const isEditingThisPlayer = playerAttempts.some(
+        const nextBall = playerAttempts.length + 1;
+        const editingThisPlayer = playerAttempts.some(
           (row) => row.id === editingAttemptId
         );
-        const expanded = expandedByPlayer[player.id] === true;
-        const nextBall = playerAttempts.length + 1;
 
         return (
           <div
@@ -84,31 +121,9 @@ export default function FlyCatchPanel({
               <span className="text-sm font-bold text-zinc-900">
                 {player.name}
               </span>
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-zinc-500">
-                  接住 {caughtCount}/{playerAttempts.length}
-                </span>
-                <button
-                  type="button"
-                  aria-expanded={expanded}
-                  aria-label={expanded ? "收起球次" : "展开球次"}
-                  onClick={() =>
-                    setExpandedByPlayer((prev) => ({
-                      ...prev,
-                      [player.id]: !expanded,
-                    }))
-                  }
-                  className="flex h-6 w-6 items-center justify-center text-zinc-500 hover:text-zinc-900"
-                >
-                  <span
-                    className={`inline-block text-[10px] leading-none transition-transform ${
-                      expanded ? "" : "-rotate-90"
-                    }`}
-                  >
-                    ▼
-                  </span>
-                </button>
-              </div>
+              <span className="text-xs text-zinc-500">
+                接住 {caughtCount}/{playerAttempts.length}
+              </span>
             </div>
 
             <input
@@ -119,63 +134,66 @@ export default function FlyCatchPanel({
               className="w-full border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900"
             />
 
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="w-14 shrink-0 text-sm font-medium text-zinc-800">
-                {ballLabel(nextBall)}
-              </span>
-              <button
-                type="button"
-                onClick={() =>
-                  onRecordAttempt(player.id, player.name, true)
-                }
-                className="flex-1 border border-zinc-900 bg-zinc-900 py-2 text-sm text-white hover:bg-zinc-800"
-              >
-                {isEditingThisPlayer ? "改为接住" : "接住"}
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  onRecordAttempt(player.id, player.name, false)
-                }
-                className="flex-1 border border-zinc-300 py-2 text-sm text-zinc-700 hover:bg-zinc-100"
-              >
-                {isEditingThisPlayer ? "改为没接住" : "没接住"}
-              </button>
-              <button
-                type="button"
-                onClick={() => onUndoLast(player.id)}
-                disabled={playerAttempts.length === 0}
-                className="border border-zinc-300 px-3 py-2 text-xs text-zinc-600 hover:bg-zinc-100 disabled:text-zinc-400"
-              >
-                撤销上一球
-              </button>
-            </div>
-
-            {expanded ? (
-              playerAttempts.length > 0 ? (
-                <ul className="flex flex-col gap-1 text-xs text-zinc-500">
-                  {playerAttempts.map((row, index) => (
-                    <li
-                      key={row.id}
-                      className="flex items-center justify-between gap-2"
-                    >
-                      <span>
-                        {ballLabel(index + 1)} {row.caught ? "接住" : "没接住"}
+            {/* 已记球次留在原行；接住/没接住始终在下一空行 */}
+            {playerAttempts.map((row, index) => {
+              const editingThisRow = editingAttemptId === row.id;
+              return (
+                <div
+                  key={row.id}
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <span className="w-14 shrink-0 text-sm font-medium text-zinc-800">
+                    {ballLabel(index + 1)}
+                  </span>
+                  {editingThisRow ? (
+                    <CatchButtons
+                      caughtLabel="改为接住"
+                      missedLabel="改为没接住"
+                      onCaught={() =>
+                        onRecordAttempt(player.id, player.name, true)
+                      }
+                      onMissed={() =>
+                        onRecordAttempt(player.id, player.name, false)
+                      }
+                      undoDisabled={playerAttempts.length === 0}
+                      onUndo={() => onUndoLast(player.id)}
+                    />
+                  ) : (
+                    <>
+                      <span className="min-w-0 flex-1 text-sm text-zinc-800">
+                        {row.caught ? "接住" : "没接住"}
                         {row.note ? ` · ${row.note}` : ""}
-                        {editingAttemptId === row.id ? " · 修改中" : ""}
                       </span>
                       <RecordActions
                         onEdit={() => onBeginEdit(row.id)}
                         onDelete={() => onDeleteAttempt(row.id)}
                         deleteConfirm="确认删除这一球？"
                       />
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-zinc-400">暂无球次</p>
-              )
-            ) : null}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+
+            {editingThisPlayer ? null : (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-14 shrink-0 text-sm font-medium text-zinc-800">
+                  {ballLabel(nextBall)}
+                </span>
+                <CatchButtons
+                  caughtLabel="接住"
+                  missedLabel="没接住"
+                  onCaught={() =>
+                    onRecordAttempt(player.id, player.name, true)
+                  }
+                  onMissed={() =>
+                    onRecordAttempt(player.id, player.name, false)
+                  }
+                  undoDisabled={playerAttempts.length === 0}
+                  onUndo={() => onUndoLast(player.id)}
+                />
+              </div>
+            )}
           </div>
         );
       })}

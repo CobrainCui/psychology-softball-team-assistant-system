@@ -4,7 +4,7 @@ import type {
   InjuryCaseDto,
   InjuryNoteDto,
   InjuryPainLogDto,
-} from "@/lib/statusActions";
+} from "@/lib/status/shared";
 import { INJURY_KIND_LABEL, painScoreText } from "@/lib/clinical/injuryKinds";
 import { isTodayDateOnly } from "@/lib/dateOnly";
 import { RecordActions } from "@/components/records/RecordActions";

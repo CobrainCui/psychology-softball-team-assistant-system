@@ -2,26 +2,32 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useCurrentUser, type CurrentUser } from "@/lib/currentUser";
+import { useSession } from "@/lib/useSession";
+import type { SessionUser } from "@/lib/auth/types";
 
-// 功能页统一鉴权：挂载后若无身份则 replace 到 /login。
+/** 功能页统一鉴权：无 session 时跳转登录 */
 export function useRequireAuth(): {
-  currentUser: CurrentUser | null;
+  currentUser: SessionUser | null;
   isMounted: boolean;
   isAuthenticated: boolean;
+  loading: boolean;
 } {
-  const { currentUser, isMounted } = useCurrentUser();
+  const { user, isMounted, loading, isAuthenticated } = useSession();
   const router = useRouter();
 
   useEffect(() => {
-    if (isMounted && !currentUser) {
+    if (isMounted && !loading && !user) {
       router.replace("/login");
     }
-  }, [isMounted, currentUser?.playerId, router]);
+  }, [isMounted, loading, user, router]);
 
   return {
-    currentUser,
+    currentUser: user,
     isMounted,
-    isAuthenticated: Boolean(isMounted && currentUser),
+    isAuthenticated,
+    loading,
   };
 }
+
+/** @deprecated 使用 useSession / SessionUser */
+export type { SessionUser as CurrentUser } from "@/lib/auth/types";

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import MedicalDisclaimer from "@/components/MedicalDisclaimer";
+import PageLoading from "@/components/PageLoading";
 import { RecordActions } from "@/components/records/RecordActions";
 import { BatteryDriveChart } from "@/components/status/BatteryDriveChart";
 import { ScaleSlider } from "@/components/status/ScaleSlider";
@@ -13,341 +13,14 @@ import {
   CycleTrackingPanel,
 } from "@/components/status/CyclePanel";
 import { PRE_DIMENSIONS, PRE_SCAN_PROMPT, type Scale5 } from "@/lib/clinical/preDimensions";
-import { buildPreFeedback, type PreFeedbackResult } from "@/lib/clinical/preQuadrant";
-import { buildCycleAssessmentBundle } from "@/lib/clinical/buildCycleAssessment";
-import type { CycleGuidance } from "@/lib/clinical/cycleGuidance";
-import {
-  getTodayDateStr,
-  removeReadinessEntry,
-  upsertReadinessEntry,
-  type ReadinessHistoryEntry,
-} from "@/lib/readinessHistory";
-import {
-  consentToCycleTracking,
-  deletePeriodStartEvent,
-  deleteReadinessAssessment,
-  getCycleProfile,
-  getReadinessHistory,
-  recordPeriodStart,
-  saveReadinessAssessment,
-  updateCycleProfileSettings,
-  updatePeriodStartEvent,
-} from "@/lib/actions";
-import type {
-  CycleEnergyLevel,
-  CycleMoodLevel,
-  CycleProfileDto,
-  CycleSharingLevel,
-} from "@/lib/cycleTypes";
-import {
-  getPeriodStartDate,
-  setPeriodStartDate as persistPeriodStartDate,
-} from "@/lib/periodStart";
-
-type ResultView = {
-  feedback: PreFeedbackResult;
-  cyclePhaseLabel: string | null;
-  cycleGuidance: CycleGuidance | null;
-  cycleConfidence: string | null;
-  showAclCues: boolean;
-  showFemaleRedFlags: boolean;
-  redsReasons: string[];
-};
+import { useAssessmentPage } from "@/hooks/useAssessmentPage";
 
 export default function AssessmentPage() {
   const { currentUser, isMounted } = useRequireAuth();
-  const [sleep, setSleep] = useState<Scale5>(3);
-  const [stress, setStress] = useState<Scale5>(3);
-  const [fatigue, setFatigue] = useState<Scale5>(3);
-  const [soreness, setSoreness] = useState<Scale5>(3);
-  const [willingness, setWillingness] = useState<Scale5>(3);
-  const [periodStartDate, setPeriodStartDate] = useState("");
-  const [cycleIrregular, setCycleIrregular] = useState(false);
-  const [cycleProfile, setCycleProfile] = useState<CycleProfileDto | null>(null);
-  const [crampsScore, setCrampsScore] = useState(0);
-  const [cycleEnergy, setCycleEnergy] = useState<CycleEnergyLevel | null>(null);
-  const [cycleMood, setCycleMood] = useState<CycleMoodLevel | null>(null);
-  const [consentBusy, setConsentBusy] = useState(false);
-  const [history, setHistory] = useState<ReadinessHistoryEntry[]>([]);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
-  const [hasTodayCheck, setHasTodayCheck] = useState(false);
-  const [result, setResult] = useState<ResultView | null>(null);
+  const page = useAssessmentPage(currentUser, isMounted);
 
-  useEffect(() => {
-    if (!isMounted || !currentUser) return;
-    let cancelled = false;
-    setIsLoadingHistory(true);
-    if (currentUser.gender === "female") {
-      setPeriodStartDate(getPeriodStartDate(currentUser.playerId));
-    }
-    (async () => {
-      const readinessRes = await getReadinessHistory(currentUser.playerId);
-      if (cancelled) return;
-      if (!readinessRes.success) {
-        console.error("cloud denied:", readinessRes.error);
-        setHistory([]);
-        setHasTodayCheck(false);
-      } else {
-        setHistory(readinessRes.history);
-        const today = getTodayDateStr();
-        const todayEntry = readinessRes.history.find(
-          (item) => item.date === today
-        );
-        if (todayEntry) {
-          setSleep(todayEntry.sleep);
-          setStress(todayEntry.stress);
-          setFatigue(todayEntry.fatigue);
-          setSoreness(todayEntry.soreness);
-          setWillingness(todayEntry.willingness);
-          setHasTodayCheck(true);
-        } else {
-          setHasTodayCheck(false);
-        }
-      }
-      if (currentUser.gender === "female") {
-        const cycleRes = await getCycleProfile(currentUser.playerId);
-        if (!cancelled && cycleRes.success) {
-          setCycleProfile(cycleRes.profile);
-          if (cycleRes.profile?.lastPeriodStart) {
-            setPeriodStartDate(cycleRes.profile.lastPeriodStart);
-            persistPeriodStartDate(
-              currentUser.playerId,
-              cycleRes.profile.lastPeriodStart
-            );
-          }
-        }
-      }
-      if (!cancelled) setIsLoadingHistory(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isMounted, currentUser?.playerId, currentUser?.gender]);
-
-  const isFemale = isMounted && currentUser?.gender === "female";
-  const cycleTracking =
-    Boolean(cycleProfile?.consentAt) && Boolean(cycleProfile?.trackingEnabled);
-
-  const dimSetters: Record<string, (n: Scale5) => void> = {
-    sleep: setSleep,
-    stress: setStress,
-    fatigue: setFatigue,
-    soreness: setSoreness,
-    willingness: setWillingness,
-  };
-  const dimValues: Record<string, Scale5> = {
-    sleep,
-    stress,
-    fatigue,
-    soreness,
-    willingness,
-  };
-
-  const resolveCycleBundle = () =>
-    buildCycleAssessmentBundle({
-      profile: isFemale ? cycleProfile : null,
-      periodStartDate,
-      symptoms: { crampsScore, cycleEnergy, cycleMood, cycleIrregular },
-      fatigueScore: fatigue,
-      sorenessScore: soreness,
-      recentSleep: history.slice(0, 30).map((h) => h.sleep),
-      recentFatigue: history.slice(0, 30).map((h) => h.fatigue),
-    });
-
-  const handleGenerate = () => {
-    void (async () => {
-      const cycleBundle = resolveCycleBundle();
-      const inMenstrualPeriod = Boolean(cycleBundle.phase?.isMenstrual);
-      const feedback = buildPreFeedback({
-        input: { sleep, stress, fatigue, soreness, willingness },
-        inMenstrualPeriod,
-      });
-      if (!currentUser) return;
-      const entry: ReadinessHistoryEntry = {
-        playerId: currentUser.playerId,
-        date: getTodayDateStr(),
-        sleep,
-        stress,
-        fatigue,
-        soreness,
-        willingness,
-        physicalBattery: feedback.physicalBattery,
-        mentalDrive: feedback.mentalDrive,
-        quadrant: feedback.quadrant,
-      };
-      const res = await saveReadinessAssessment({
-        ...entry,
-        cycleDay: cycleBundle.phase?.dayOfCycle ?? null,
-        cyclePhaseCode: cycleBundle.phase?.hidePhaseLabels
-          ? null
-          : (cycleBundle.phase?.code ?? null),
-        cycleConfidence: cycleBundle.phase?.confidence ?? null,
-        physiologicalLoadTag: cycleBundle.loadTag,
-        crampsScore: cycleTracking ? crampsScore : null,
-        cycleEnergy: cycleTracking ? cycleEnergy : null,
-        cycleMood: cycleTracking ? cycleMood : null,
-        cycleIrregularFlag: cycleTracking ? cycleIrregular : false,
-      });
-      if (res.success) {
-        window.alert("云端打卡成功！");
-        setHasTodayCheck(true);
-      } else {
-        console.error("cloud denied:", res.error);
-        window.alert("云端同步失败，已保存为本地草稿。");
-        upsertReadinessEntry(entry);
-        setHasTodayCheck(true);
-      }
-      setHistory((prev) => {
-        const withoutSameDay = prev.filter(
-          (item) =>
-            !(item.playerId === entry.playerId && item.date === entry.date)
-        );
-        return [entry, ...withoutSameDay].sort((a, b) =>
-          b.date.localeCompare(a.date)
-        );
-      });
-      setResult({
-        feedback,
-        cyclePhaseLabel: cycleBundle.phase?.label ?? null,
-        cycleGuidance: cycleBundle.guidance,
-        cycleConfidence: cycleBundle.phase?.confidence ?? null,
-        showAclCues: cycleBundle.showAclCues,
-        showFemaleRedFlags: cycleBundle.showFemaleRedFlags,
-        redsReasons: cycleBundle.reds.reasons,
-      });
-    })();
-  };
-
-  const handleConsent = async (shareWithCoach: boolean) => {
-    if (!currentUser) return;
-    setConsentBusy(true);
-    const sharingLevel: CycleSharingLevel = shareWithCoach ? "load_only" : "none";
-    const res = await consentToCycleTracking({
-      playerId: currentUser.playerId,
-      sharingLevel,
-      seedPeriodStart: periodStartDate || undefined,
-    });
-    setConsentBusy(false);
-    if (!res.success) {
-      window.alert(res.error);
-      return;
-    }
-    setCycleProfile(res.profile);
-  };
-
-  const handleDisableTracking = async () => {
-    if (!currentUser) return;
-    const res = await updateCycleProfileSettings({
-      playerId: currentUser.playerId,
-      trackingEnabled: false,
-    });
-    if (!res.success) {
-      window.alert(res.error);
-      return;
-    }
-    setCycleProfile(res.profile);
-  };
-
-  const handleDeleteToday = async () => {
-    if (!currentUser) return;
-    const date = getTodayDateStr();
-    const res = await deleteReadinessAssessment({
-      playerId: currentUser.playerId,
-      date,
-    });
-    if (!res.success && res.error !== "没有今日评估记录") {
-      console.error("云端被拒:", res.error);
-      window.alert(res.error);
-      return;
-    }
-    removeReadinessEntry(currentUser.playerId, date);
-    setHistory((prev) =>
-      prev.filter(
-        (item) =>
-          !(item.playerId === currentUser.playerId && item.date === date)
-      )
-    );
-    setHasTodayCheck(false);
-    setResult(null);
-  };
-
-  const applyCycleProfile = (
-    profile: NonNullable<typeof cycleProfile>
-  ) => {
-    setCycleProfile(profile);
-    if (profile.lastPeriodStart && currentUser) {
-      setPeriodStartDate(profile.lastPeriodStart);
-      persistPeriodStartDate(currentUser.playerId, profile.lastPeriodStart);
-    }
-  };
-
-  const handleRecordPeriodStart = async () => {
-    if (!currentUser || !cycleTracking || !periodStartDate) return;
-    persistPeriodStartDate(currentUser.playerId, periodStartDate);
-    const res = await recordPeriodStart({
-      playerId: currentUser.playerId,
-      date: periodStartDate,
-      crampsScore,
-    });
-    if (!res.success) {
-      window.alert(res.error);
-      return;
-    }
-    applyCycleProfile(res.profile);
-  };
-
-  const handleUpdatePeriodEvent = async (
-    eventId: string,
-    patch: { date?: string; crampsScore?: number | null }
-  ) => {
-    if (!currentUser) return;
-    const res = await updatePeriodStartEvent({
-      playerId: currentUser.playerId,
-      eventId,
-      ...patch,
-    });
-    if (!res.success) {
-      window.alert(res.error);
-      return;
-    }
-    applyCycleProfile(res.profile);
-  };
-
-  const handleDeletePeriodEvent = async (eventId: string) => {
-    if (!currentUser) return;
-    const res = await deletePeriodStartEvent({
-      playerId: currentUser.playerId,
-      eventId,
-    });
-    if (!res.success) {
-      window.alert(res.error);
-      return;
-    }
-    applyCycleProfile(res.profile);
-    if (!res.profile.lastPeriodStart) {
-      persistPeriodStartDate(currentUser.playerId, "");
-      setPeriodStartDate("");
-    }
-  };
-
-  const handlePeriodDateChange = (next: string) => {
-    setPeriodStartDate(next);
-    if (currentUser) persistPeriodStartDate(currentUser.playerId, next);
-  };
-
-  const patchCycleSettings = async (
-    patch: Omit<Parameters<typeof updateCycleProfileSettings>[0], "playerId">
-  ) => {
-    if (!currentUser) return;
-    const res = await updateCycleProfileSettings({
-      ...patch,
-      playerId: currentUser.playerId,
-    });
-    if (res.success) setCycleProfile(res.profile);
-    else window.alert(res.error);
-  };
-
-  if (!isMounted || !currentUser) return null;
+  if (!isMounted) return <PageLoading />;
+  if (!currentUser) return <PageLoading />;
 
   return (
     <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
@@ -361,6 +34,11 @@ export default function AssessmentPage() {
           </p>
         </div>
         <MedicalDisclaimer />
+        {page.notice ? (
+          <p className="border border-zinc-300 bg-white p-3 text-sm text-zinc-700">
+            {page.notice}
+          </p>
+        ) : null}
         <div className="border border-zinc-200 bg-white px-4 py-3 text-xs leading-relaxed text-zinc-600">
           有关节/韧带局部剧痛或旧伤不适？请前往{" "}
           <Link href="/prehab" className="underline underline-offset-2 hover:text-zinc-900">
@@ -377,89 +55,89 @@ export default function AssessmentPage() {
             hint1={dim.hint1}
             hint3={dim.hint3}
             hint5={dim.hint5}
-            value={dimValues[dim.field]!}
-            onChange={(n) => dimSetters[dim.field]!(n as Scale5)}
+            value={page.dimValues[dim.field]!}
+            onChange={(n) => page.dimSetters[dim.field]!(n as Scale5)}
           />
         ))}
-        {isFemale && (
+        {page.isFemale && (
           <div className="flex flex-col gap-3 border border-zinc-200 p-4">
             <label className="text-xs uppercase text-gray-500">
               生理周期监测（自愿）
             </label>
-            {!cycleTracking ? (
+            {!page.cycleTracking ? (
               <CycleConsentPanel
-                periodStartDate={periodStartDate}
+                periodStartDate={page.periodStartDate}
                 onPeriodStartDate={(next) => {
-                  setPeriodStartDate(next);
-                  if (currentUser) {
-                    persistPeriodStartDate(currentUser.playerId, next);
+                  page.setPeriodStartDate(next);
+                  if (currentUser.playerId) {
+                    page.persistPeriodStartDate(currentUser.playerId, next);
                   }
                 }}
-                consentBusy={consentBusy}
-                onConsent={(share) => void handleConsent(share)}
+                consentBusy={page.consentBusy}
+                onConsent={(share) => void page.handleConsent(share)}
               />
             ) : (
               <CycleTrackingPanel
-                cycleProfile={cycleProfile}
-                periodStartDate={periodStartDate}
-                crampsScore={crampsScore}
-                cycleEnergy={cycleEnergy}
-                cycleMood={cycleMood}
-                cycleIrregular={cycleIrregular}
-                onPeriodDateChange={handlePeriodDateChange}
-                onRecordPeriodStart={() => void handleRecordPeriodStart()}
+                cycleProfile={page.cycleProfile}
+                periodStartDate={page.periodStartDate}
+                crampsScore={page.crampsScore}
+                cycleEnergy={page.cycleEnergy}
+                cycleMood={page.cycleMood}
+                cycleIrregular={page.cycleIrregular}
+                onPeriodDateChange={page.handlePeriodDateChange}
+                onRecordPeriodStart={() => void page.handleRecordPeriodStart()}
                 onUpdatePeriodEvent={(event, patch) =>
-                  void handleUpdatePeriodEvent(event.id, patch)
+                  void page.handleUpdatePeriodEvent(event.id, patch)
                 }
-                onDeletePeriodEvent={(id) => void handleDeletePeriodEvent(id)}
-                onCramps={setCrampsScore}
-                onEnergy={setCycleEnergy}
-                onMood={setCycleMood}
-                onIrregular={setCycleIrregular}
-                onPatch={(patch) => void patchCycleSettings(patch)}
-                onDisable={() => void handleDisableTracking()}
+                onDeletePeriodEvent={(id) => void page.handleDeletePeriodEvent(id)}
+                onCramps={page.setCrampsScore}
+                onEnergy={page.setCycleEnergy}
+                onMood={page.setCycleMood}
+                onIrregular={page.setCycleIrregular}
+                onPatch={(patch) => void page.patchCycleSettings(patch)}
+                onDisable={() => void page.handleDisableTracking()}
               />
             )}
           </div>
         )}
         <button
-          onClick={handleGenerate}
-          disabled={isLoadingHistory}
+          onClick={page.handleGenerate}
+          disabled={page.isLoadingHistory}
           className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500"
         >
-          {hasTodayCheck ? "更新今日四象限反馈" : "生成今日四象限反馈"}
+          {page.hasTodayCheck ? "更新今日四象限反馈" : "生成今日四象限反馈"}
         </button>
-        {hasTodayCheck ? (
+        {page.hasTodayCheck ? (
           <div className="flex justify-end">
             <RecordActions
-              onDelete={() => void handleDeleteToday()}
+              onDelete={() => void page.handleDeleteToday()}
               deleteConfirm="确认删除今日评估记录？"
             />
           </div>
         ) : null}
-        {result && (
+        {page.result && (
           <div className="flex flex-col gap-3 border-2 border-zinc-900 bg-white p-4">
             <CycleResultExtras
-              cyclePhaseLabel={result.cyclePhaseLabel}
-              cycleConfidence={result.cycleConfidence}
-              cycleGuidance={result.cycleGuidance}
-              showAclCues={result.showAclCues}
-              showFemaleRedFlags={result.showFemaleRedFlags}
-              redsReasons={result.redsReasons}
+              cyclePhaseLabel={page.result.cyclePhaseLabel}
+              cycleConfidence={page.result.cycleConfidence}
+              cycleGuidance={page.result.cycleGuidance}
+              showAclCues={page.result.showAclCues}
+              showFemaleRedFlags={page.result.showFemaleRedFlags}
+              redsReasons={page.result.redsReasons}
             />
             <h2 className="text-lg font-medium text-zinc-900">
-              {result.feedback.title}
+              {page.result.feedback.title}
             </h2>
             <p className="font-mono text-xs text-zinc-500">
-              电量 {result.feedback.physicalBattery.toFixed(1)} · 动力{" "}
-              {result.feedback.mentalDrive}
+              电量 {page.result.feedback.physicalBattery.toFixed(1)} · 动力{" "}
+              {page.result.feedback.mentalDrive}
             </p>
             <BatteryDriveChart
-              physicalBattery={result.feedback.physicalBattery}
-              mentalDrive={result.feedback.mentalDrive}
+              physicalBattery={page.result.feedback.physicalBattery}
+              mentalDrive={page.result.feedback.mentalDrive}
             />
             <p className="whitespace-pre-line text-sm leading-relaxed text-zinc-700">
-              {result.feedback.narrative}
+              {page.result.feedback.narrative}
             </p>
           </div>
         )}

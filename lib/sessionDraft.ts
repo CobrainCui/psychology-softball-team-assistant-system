@@ -31,8 +31,14 @@ import {
   createDefaultSpeedColumns,
   resolveSpeedGrid,
 } from "@/lib/testDay/speedGrid";
+import {
+  emptyCustomTestSlice,
+  ensureCustomTestDefs,
+  parseCustomTestSlice,
+  type CustomTestSlice,
+} from "@/lib/testDay/customTests";
 
-export const SESSION_DRAFT_SCHEMA_VERSION = 4;
+export const SESSION_DRAFT_SCHEMA_VERSION = 5;
 
 export const ROLE_ASSIGNMENT_ITEMS = ["投手", "一垒"] as const;
 
@@ -51,7 +57,7 @@ export type RoleAssignmentItem = (typeof ROLE_ASSIGNMENT_ITEMS)[number];
 
 export type Assignments = Record<string, string[]>;
 
-export interface SessionDraft extends SkillArchiveSlice {
+export interface SessionDraft extends SkillArchiveSlice, CustomTestSlice {
   schemaVersion: number;
   hits: HitRecord[];
   speedRecords: SpeedRecord[];
@@ -100,6 +106,7 @@ export function createEmptySessionDraft(
     committedAssignments: {},
     assignmentLog: [],
     ...emptySkillArchiveSlice(),
+    ...emptyCustomTestSlice(),
   };
 }
 
@@ -139,6 +146,7 @@ export function loadSessionDraft(): SessionDraft {
           ? (obj.testItems as string[])
           : [...DEFAULT_TEST_ITEMS]
       );
+      const customSlice = parseCustomTestSlice(obj);
 
       return {
         schemaVersion: SESSION_DRAFT_SCHEMA_VERSION,
@@ -165,6 +173,14 @@ export function loadSessionDraft(): SessionDraft {
         throwPlays: Array.isArray(obj.throwPlays)
           ? obj.throwPlays.filter(isThrowPlay)
           : [],
+        customTestDefs: ensureCustomTestDefs(
+          testItems,
+          customSlice.customTestDefs,
+          DEFAULT_TEST_ITEMS
+        ),
+        customPlayerNotes: customSlice.customPlayerNotes,
+        customGroupNotes: customSlice.customGroupNotes,
+        customSingleNotes: customSlice.customSingleNotes,
       };
     }
   }
@@ -201,6 +217,14 @@ export function saveSessionDraft(draft: SessionDraft): void {
     strikeJudgeColumns: draft.strikeJudgeColumns,
     strikeJudgeCells: draft.strikeJudgeCells,
     throwPlays: draft.throwPlays,
+    customTestDefs: ensureCustomTestDefs(
+      draft.testItems,
+      draft.customTestDefs,
+      DEFAULT_TEST_ITEMS
+    ),
+    customPlayerNotes: draft.customPlayerNotes,
+    customGroupNotes: draft.customGroupNotes,
+    customSingleNotes: draft.customSingleNotes,
   };
   localStorage.setItem(STORAGE_KEYS.sessionDraft, JSON.stringify(payload));
   // 写入新草稿后不再保留旧 hits key，避免双源互相覆盖

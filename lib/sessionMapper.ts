@@ -2,6 +2,9 @@
 
 import {
   GAME_ARCHIVE_SCHEMA_VERSION,
+  HIT_QUALITY_VALUES,
+  HIT_RESULT_VALUES,
+  PITCH_TYPE_VALUES,
   type FlyCatchAttempt,
   type GameArchive,
   type HitQuality,
@@ -19,6 +22,7 @@ import {
   type ThrowTestItem,
 } from "@/lib/gameArchive";
 import { resolveSpeedGrid } from "@/lib/testDay/speedGrid";
+import { parseCustomTestSlice } from "@/lib/testDay/customTests";
 
 type SessionWithRelations = {
   schemaVersion: number;
@@ -91,27 +95,12 @@ type SessionWithRelations = {
     thrower: { id: string; name: string };
     firstBase: { id: string; name: string };
   }[];
+  customTests?: unknown;
 };
 
-const HIT_RESULTS: ReadonlySet<string> = new Set([
-  "LD",
-  "FB",
-  "GB",
-  "PU",
-  "MISS",
-]);
-const PITCH_TYPES: ReadonlySet<string> = new Set([
-  "FB",
-  "CB",
-  "SL",
-  "CH",
-  "OT",
-]);
-const HIT_QUALITIES: ReadonlySet<string> = new Set([
-  "Hard",
-  "Medium",
-  "Soft",
-]);
+const HIT_RESULTS: ReadonlySet<string> = new Set(HIT_RESULT_VALUES);
+const PITCH_TYPES: ReadonlySet<string> = new Set(PITCH_TYPE_VALUES);
+const HIT_QUALITIES: ReadonlySet<string> = new Set(HIT_QUALITY_VALUES);
 
 export function asHitResult(value: unknown): HitResult | null {
   return typeof value === "string" && HIT_RESULTS.has(value)
@@ -251,6 +240,8 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
       timestamp: play.recordedAt.getTime(),
     }));
 
+  const custom = parseCustomTestSlice(session.customTests);
+
   return {
     schemaVersion: session.schemaVersion || GAME_ARCHIVE_SCHEMA_VERSION,
     gameId: session.archivedAt.getTime(),
@@ -263,5 +254,6 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
     strikeJudgeColumns,
     strikeJudgeCells,
     throwPlays,
+    ...custom,
   };
 }

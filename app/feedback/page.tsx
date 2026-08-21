@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import MedicalDisclaimer from "@/components/MedicalDisclaimer";
+import PageLoading from "@/components/PageLoading";
 import { RecordActions } from "@/components/records/RecordActions";
 import {
   ACTIVITY_TYPE_OPTIONS,
@@ -20,8 +21,8 @@ import {
   saveSessionFeedback,
   updateSessionFeedback,
   type SessionFeedbackSaved,
-} from "@/lib/actions";
-import { getTodayDateStr } from "@/lib/readinessHistory";
+} from "@/lib/status/feedbackActions";
+import { getTodayDateStr } from "@/lib/dateOnly";
 import {
   appendSessionFeedbackDraft,
   deleteSessionFeedbackDraft,
@@ -75,6 +76,7 @@ export default function SessionFeedbackPage() {
     id: string;
     source: "cloud" | "local";
   } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const resetForm = () => {
     setActivityType("batting");
@@ -86,7 +88,7 @@ export default function SessionFeedbackPage() {
 
   const reloadList = async (playerId: string) => {
     const date = getTodayDateStr();
-    const res = await getSessionFeedbacks(playerId, date);
+    const res = await getSessionFeedbacks(date);
     const cloud = res.success ? res.entries.map(fromCloud) : [];
     if (!res.success) console.error("云端被拒:", res.error);
     const local = loadPlayerSessionFeedbackDrafts(playerId, date)
@@ -97,20 +99,25 @@ export default function SessionFeedbackPage() {
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
-    if (currentUser.role === "coach") {
+    if (currentUser.roles.includes("coach")) {
       router.replace("/coach");
       return;
     }
-    void reloadList(currentUser.playerId);
+    if (!currentUser.playerId) return;
+    const playerId = currentUser.playerId;
+    const timer = window.setTimeout(() => {
+      void reloadList(playerId);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [isMounted, currentUser, router]);
 
   const handleSubmit = async () => {
-    if (!currentUser || status === "saving") return;
+    if (!currentUser?.playerId || status === "saving") return;
+    const playerId = currentUser.playerId;
     setStatus("saving");
     const date = getTodayDateStr();
     const noteTrimmed = note.trim() ? note.trim().slice(0, 200) : null;
     const payload = {
-      playerId: currentUser.playerId,
       date,
       activityType,
       sessionRpe,
@@ -126,7 +133,7 @@ export default function SessionFeedbackPage() {
         note: noteTrimmed,
       });
       setStatus("local");
-      await reloadList(currentUser.playerId);
+      await reloadList(playerId);
       resetForm();
       return;
     }
@@ -139,11 +146,11 @@ export default function SessionFeedbackPage() {
         resetForm();
       } else {
         console.error("云端被拒:", res.error);
-        window.alert(res.error);
+        setNotice(res.error);
         setStatus("idle");
         return;
       }
-      await reloadList(currentUser.playerId);
+      await reloadList(playerId);
       return;
     }
 
@@ -155,8 +162,8 @@ export default function SessionFeedbackPage() {
     } else {
       console.error("云端被拒:", res.error);
       appendSessionFeedbackDraft({
-        playerId: currentUser.playerId,
-        playerName: currentUser.playerName,
+        playerId,
+        playerName: currentUser.playerName ?? currentUser.username,
         date,
         activityType,
         sessionRpe,
@@ -164,10 +171,10 @@ export default function SessionFeedbackPage() {
         note: noteTrimmed,
       });
       setStatus("local");
-      window.alert("云端同步失败，已保存为本地草稿。");
+      setNotice("云端同步失败，已保存为本地草稿。");
       resetForm();
     }
-    await reloadList(currentUser.playerId);
+    await reloadList(playerId);
   };
 
   const handleBeginEdit = (item: ListedFeedback) => {
@@ -181,25 +188,27 @@ export default function SessionFeedbackPage() {
   };
 
   const handleDelete = async (item: ListedFeedback) => {
-    if (!currentUser) return;
+    if (!currentUser?.playerId) return;
+    const playerId = currentUser.playerId;
     if (item.source === "local") {
       deleteSessionFeedbackDraft(item.id);
     } else {
       const res = await deleteSessionFeedback({
-        playerId: currentUser.playerId,
         id: item.id,
       });
       if (!res.success) {
         console.error("云端被拒:", res.error);
-        window.alert(res.error);
+        setNotice(res.error);
         return;
       }
     }
     if (editing?.id === item.id) resetForm();
-    await reloadList(currentUser.playerId);
+    await reloadList(playerId);
   };
 
-  if (!isMounted || !currentUser || currentUser.role === "coach") return null;
+  if (!isMounted || !currentUser || currentUser.roles.includes("coach")) {
+    return <PageLoading />;
+  }
   const rpeTip = RPE_SCALE_TICKS.find((t) => t.value === sessionRpe)?.label;
 
   return (
@@ -214,6 +223,11 @@ export default function SessionFeedbackPage() {
           </p>
         </div>
         <MedicalDisclaimer />
+        {notice ? (
+          <p className="border border-zinc-300 bg-white p-3 text-sm text-zinc-700">
+            {notice}
+          </p>
+        ) : null}
         {entries.length > 0 ? (
           <ul className="flex flex-col gap-1 border border-zinc-200 bg-white p-3">
             {entries.map((item) => (

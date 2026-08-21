@@ -23,6 +23,43 @@ enum PlayerRole {
   coach
 }
 
+/// 账密身份（与 Player.role 分阶段迁移；权限以 AccountRole 为准）
+enum AccountStatus {
+  active
+  disabled
+}
+
+enum ActiveView {
+  player
+  captain
+  coach
+}
+
+enum AccountRoleKind {
+  player
+  captain
+  coach
+  admin
+}
+
+enum MembershipClaimStatus {
+  pending
+  approved
+  rejected
+}
+
+enum EnrollmentCodeStatus {
+  active
+  used
+  revoked
+}
+
+enum RoleChangeRequestStatus {
+  pending
+  approved
+  rejected
+}
+
 enum HitResult {
   LD
   FB
@@ -158,30 +195,78 @@ enum CyclePhaseCode {
   late_luteal
 }
 
+enum SeasonStatus {
+  planned
+  active
+  archived
+}
+
+enum ScheduleEventKind {
+  game
+  scrimmage
+}
+
+enum ScheduleEventStatus {
+  planned
+  cancelled
+  completed
+}
+
+enum GameRecordFileStatus {
+  pending
+  ready
+}
+
+enum GameSummaryStatus {
+  draft
+  confirmed
+}
+
+enum GameResultKind {
+  win
+  loss
+  tie
+  unknown
+}
+
+enum GameSummarySource {
+  manual
+  iscore_pdf
+}
+
 // ——— 组织：一支球队（未来可扩展多队，当前只种子一队） ———
 
 model Team {
   id        String   @id @default(cuid())
   name      String
+  /// IANA 时区；赛季自然日与窗口展示用此时区
+  timeZone  String   @default("Asia/Shanghai")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  players  Player[]
-  sessions TestSession[]
+  players         Player[]
+  sessions        TestSession[]
+  accounts        Account[]
+  enrollmentCodes EnrollmentCode[]
+  seasons         Season[]
+  scheduleEvents  ScheduleEvent[]
 }
 
-// ——— 名册 + 极简身份（教练/队员）；登录后续可挂 Credential ———
+// ——— 名册；Player.role 分阶段废弃，权限见 AccountRole ———
 
 model Player {
   id        String     @id @default(cuid())
   teamId    String
   name      String
   gender    Gender?
+  /// @deprecated 分阶段迁移至 AccountRole；应用层勿再写入
   role      PlayerRole @default(player)
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
   team                 Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  account              Account?
+  membershipClaims     MembershipClaim[]
   hits                 Hit[]
   speedRecords         SpeedRecord[]
   speedMarks           SpeedMark[]
@@ -195,6 +280,7 @@ model Player {
   sessionFeedbacks SessionFeedback[]
   cycleProfile     CycleProfile?
   cycleEvents      CycleEvent[]
+  gamePlayerLines  ConfirmedGamePlayerLine[]
 
   @@index([teamId])
   @@index([name])
@@ -215,6 +301,8 @@ model TestSession {
   testItems     Json?
   /// 排阵 push 记录（修改人 + 添加/删除摘要）
   assignmentLog Json?
+  /// 自定义测试定义与文字备注快照
+  customTests   Json?
   createdAt     DateTime @default(now())
 
   team               Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
@@ -509,4 +597,279 @@ model SessionFeedback {
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   @@index([playerId, date])
+}
+
+// ——— 账密身份（单队；Account 与 Player 分离） ———
+
+model Account {
+  id            String        @id @default(cuid())
+  teamId        String
+  username      String        @unique
+  passwordHash  String
+  email         String?
+  phone         String?
+  emailVerified Boolean       @default(false)
+  phoneVerified Boolean       @default(false)
+  status        AccountStatus @default(active)
+  activeView    ActiveView    @default(player)
+  playerId      String?       @unique
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  team                    Team                    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player                  Player?                 @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  roles                   AccountRole[]
+  sessions                AuthSession[]
+  membershipClaim         MembershipClaim?
+  passwordResetTokens     PasswordResetToken[]
+  roleChangeRequests      RoleChangeRequest[]
+  enrollmentCodesCreated  EnrollmentCode[]        @relation("EnrollmentCodeCreator")
+  enrollmentCodesUsed     EnrollmentCode[]        @relation("EnrollmentCodeUser")
+  claimsReviewed          MembershipClaim[]       @relation("ClaimReviewer")
+  roleChangesReviewed     RoleChangeRequest[]     @relation("RoleChangeReviewer")
+  auditLogsAsActor        AuthAuditLog[]          @relation("AuditActor")
+  seasonsActivated        Season[]                @relation("SeasonActivatedBy")
+  seasonsArchived         Season[]                @relation("SeasonArchivedBy")
+  eventsCorrected         ScheduleEvent[]         @relation("ScheduleEventCorrectedBy")
+  gameFilesUploaded       GameRecordFile[]        @relation("GameFileUploader")
+  gameFilesDeleted        GameRecordFile[]        @relation("GameFileDeleter")
+  gameSummariesConfirmed  ConfirmedGameSummary[]  @relation("GameSummaryConfirmer")
+
+  @@index([teamId])
+}
+
+model AccountRole {
+  id                 String          @id @default(cuid())
+  accountId          String
+  role               AccountRoleKind
+  grantedByAccountId String?
+  grantedAt          DateTime        @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, role])
+  @@index([accountId])
+}
+
+model MembershipClaim {
+  id                  String                @id @default(cuid())
+  accountId           String                @unique
+  status              MembershipClaimStatus @default(pending)
+  displayName         String
+  playerId            String?
+  reviewedByAccountId String?
+  reviewedAt          DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  account  Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  reviewer Account? @relation("ClaimReviewer", fields: [reviewedByAccountId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+}
+
+model EnrollmentCode {
+  id                 String               @id @default(cuid())
+  teamId             String
+  codeHash           String               @unique
+  status             EnrollmentCodeStatus @default(active)
+  expiresAt          DateTime?
+  usedAt             DateTime?
+  usedByAccountId    String?
+  revokedAt          DateTime?
+  revokedNote        String?
+  createdByAccountId String?
+  createdAt          DateTime             @default(now())
+
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  creator   Account? @relation("EnrollmentCodeCreator", fields: [createdByAccountId], references: [id], onDelete: SetNull)
+  usedBy    Account? @relation("EnrollmentCodeUser", fields: [usedByAccountId], references: [id], onDelete: SetNull)
+
+  @@index([teamId, status])
+}
+
+model AuthSession {
+  id        String   @id @default(cuid())
+  accountId String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  accountId String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+
+model RoleChangeRequest {
+  id                  String                  @id @default(cuid())
+  accountId           String
+  requestedRole       AccountRoleKind
+  status              RoleChangeRequestStatus @default(pending)
+  reviewedByAccountId String?
+  reviewedAt          DateTime?
+  createdAt           DateTime                @default(now())
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  reviewer Account? @relation("RoleChangeReviewer", fields: [reviewedByAccountId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, status])
+}
+
+model AuthAuditLog {
+  id              String   @id @default(cuid())
+  action          String
+  actorAccountId  String?
+  targetAccountId String?
+  targetId        String?
+  metadata        Json?
+  ip              String?
+  createdAt       DateTime @default(now())
+
+  actor Account? @relation("AuditActor", fields: [actorAccountId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([action])
+}
+
+model AuthRateLimit {
+  bucket    String   @id
+  count     Int      @default(0)
+  windowEnd DateTime
+  updatedAt DateTime @updatedAt
+}
+
+// ——— 赛季 / 赛程 / 比赛文件与确认摘要 ———
+
+model Season {
+  id               String       @id @default(cuid())
+  teamId           String
+  name             String
+  startsOn         DateTime     @db.Date
+  endsOn           DateTime     @db.Date
+  effectiveEndsOn  DateTime     @db.Date
+  status           SeasonStatus @default(planned)
+  activatedById    String?
+  archivedById     String?
+  activatedAt      DateTime?
+  archivedAt       DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  activatedBy Account? @relation("SeasonActivatedBy", fields: [activatedById], references: [id], onDelete: SetNull)
+  archivedBy  Account? @relation("SeasonArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  events      ScheduleEvent[]
+
+  @@unique([id, teamId])
+  @@index([teamId, status])
+}
+
+model ScheduleEvent {
+  id            String               @id @default(cuid())
+  teamId        String
+  seasonId      String?
+  kind          ScheduleEventKind
+  status        ScheduleEventStatus  @default(planned)
+  startAt       DateTime
+  endAt         DateTime
+  opponent      String?
+  venue         String?
+  title         String?
+  note          String?
+  statusNote    String?
+  correctedAt   DateTime?
+  correctedById String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  season      Season?  @relation(fields: [seasonId, teamId], references: [id, teamId], onDelete: Restrict)
+  correctedBy Account? @relation("ScheduleEventCorrectedBy", fields: [correctedById], references: [id], onDelete: SetNull)
+  files       GameRecordFile[]
+  summaries   ConfirmedGameSummary[]
+
+  @@index([teamId, startAt])
+  @@index([seasonId])
+}
+
+model GameRecordFile {
+  id            String               @id @default(cuid())
+  teamId        String
+  scheduleEventId String
+  storageKey    String               @unique
+  originalName  String
+  mimeType      String
+  sizeBytes     Int
+  source        String               @default("upload")
+  status        GameRecordFileStatus @default(pending)
+  uploadedById  String
+  uploadedAt    DateTime             @default(now())
+  deletedAt     DateTime?
+  deletedById   String?
+  retainEvidence Boolean             @default(false)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  event      ScheduleEvent @relation(fields: [scheduleEventId], references: [id], onDelete: Cascade)
+  uploadedBy Account       @relation("GameFileUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  deletedBy  Account?      @relation("GameFileDeleter", fields: [deletedById], references: [id], onDelete: SetNull)
+  summaries  ConfirmedGameSummary[]
+
+  @@index([scheduleEventId, status])
+  @@index([teamId])
+}
+
+model ConfirmedGameSummary {
+  id               String            @id @default(cuid())
+  teamId           String
+  scheduleEventId  String
+  status           GameSummaryStatus @default(draft)
+  ourScore         Int?
+  opponentScore    Int?
+  result           GameResultKind    @default(unknown)
+  source           GameSummarySource @default(manual)
+  sourceFileId     String?
+  confirmedById    String?
+  confirmedAt      DateTime?
+  version          Int               @default(1)
+  supersededAt     DateTime?
+  note             String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  event       ScheduleEvent  @relation(fields: [scheduleEventId], references: [id], onDelete: Cascade)
+  sourceFile  GameRecordFile? @relation(fields: [sourceFileId], references: [id], onDelete: SetNull)
+  confirmedBy Account?       @relation("GameSummaryConfirmer", fields: [confirmedById], references: [id], onDelete: SetNull)
+  lines       ConfirmedGamePlayerLine[]
+
+  @@index([scheduleEventId, status])
+  @@index([teamId])
+}
+
+model ConfirmedGamePlayerLine {
+  id            String  @id @default(cuid())
+  summaryId     String
+  playerId      String
+  participated  Boolean @default(true)
+
+  summary ConfirmedGameSummary @relation(fields: [summaryId], references: [id], onDelete: Cascade)
+  player  Player               @relation(fields: [playerId], references: [id], onDelete: Restrict)
+
+  @@unique([summaryId, playerId])
+  @@index([playerId])
 }

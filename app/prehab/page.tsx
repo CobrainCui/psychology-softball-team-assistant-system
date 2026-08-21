@@ -2,15 +2,16 @@
 
 import { useEffect, useState } from "react";
 import MedicalDisclaimer from "@/components/MedicalDisclaimer";
+import PageLoading from "@/components/PageLoading";
 import { InjuryCaseCard } from "@/components/injury/InjuryCaseCard";
-import { PAIN_AREA_OPTIONS, type PainArea } from "@/lib/clinical/painAreas";
 import {
-  INJURY_KIND_OPTIONS,
-  PAIN_EXERCISE_RELATION_OPTIONS,
-  type InjuryKind,
-  type PainExerciseRelationId,
-} from "@/lib/clinical/injuryKinds";
-import { getTodayDateStr } from "@/lib/readinessHistory";
+  InjuryCaseForm,
+  InjuryNoteForm,
+  InjuryPainForm,
+} from "@/components/injury/InjuryForms";
+import type { PainArea } from "@/lib/clinical/painAreas";
+import type { InjuryKind, PainExerciseRelationId } from "@/lib/clinical/injuryKinds";
+import { getTodayDateStr } from "@/lib/dateOnly";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import {
   addInjuryNote,
@@ -24,8 +25,8 @@ import {
   updateInjuryCase,
   updateInjuryNote,
   updateInjuryPainLog,
-  type InjuryCaseDto,
-} from "@/lib/actions";
+} from "@/lib/status/injuryActions";
+import type { InjuryCaseDto } from "@/lib/status/shared";
 
 type Tab = "today" | "history";
 
@@ -34,6 +35,7 @@ export default function InjuryPage() {
   const [tab, setTab] = useState<Tab>("today");
   const [cases, setCases] = useState<InjuryCaseDto[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [painArea, setPainArea] = useState<PainArea>("shoulder");
   const [locationHint, setLocationHint] = useState("");
@@ -52,8 +54,8 @@ export default function InjuryPage() {
   const [editingPainLogId, setEditingPainLogId] = useState<string | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
 
-  const reload = async (playerId: string) => {
-    const res = await getInjuryCases(playerId);
+  const reload = async () => {
+    const res = await getInjuryCases();
     if (!res.success) {
       console.error("云端被拒:", res.error);
       setLoadError(res.error);
@@ -65,8 +67,11 @@ export default function InjuryPage() {
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
-    void reload(currentUser.playerId);
-  }, [isMounted, currentUser?.playerId]);
+    const timer = window.setTimeout(() => {
+      void reload();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isMounted, currentUser]);
 
   const toggleRelation = (id: PainExerciseRelationId) => {
     setRelations((prev) => {
@@ -94,22 +99,20 @@ export default function InjuryPage() {
     if (!currentUser) return;
     if (editingCaseId) {
       const res = await updateInjuryCase({
-        playerId: currentUser.playerId,
         caseId: editingCaseId,
         painArea,
         locationHint,
         injuryKind,
       });
       if (!res.success) {
-        window.alert(res.error);
+        setNotice(res.error);
         return;
       }
       resetForm();
-      await reload(currentUser.playerId);
+      await reload();
       return;
     }
     const res = await createInjuryCase({
-      playerId: currentUser.playerId,
       painArea,
       locationHint,
       injuryKind,
@@ -120,35 +123,33 @@ export default function InjuryPage() {
       parentCaseId,
     });
     if (!res.success) {
-      window.alert(res.error);
+      setNotice(res.error);
       return;
     }
     resetForm();
-    await reload(currentUser.playerId);
+    await reload();
   };
 
   const handlePainSave = async () => {
     if (!currentUser || !painTarget) return;
     if (editingPainLogId) {
       const res = await updateInjuryPainLog({
-        playerId: currentUser.playerId,
         logId: editingPainLogId,
         painScore,
         painExerciseRelations: relations,
         note: note || null,
       });
       if (!res.success) {
-        window.alert(res.error);
+        setNotice(res.error);
         return;
       }
       setPainTarget(null);
       setEditingPainLogId(null);
       setNote("");
-      await reload(currentUser.playerId);
+      await reload();
       return;
     }
     const res = await addInjuryPainLog({
-      playerId: currentUser.playerId,
       caseId: painTarget.id,
       date: getTodayDateStr(),
       painScore,
@@ -156,49 +157,47 @@ export default function InjuryPage() {
       note: note || null,
     });
     if (!res.success) {
-      window.alert(res.error);
+      setNotice(res.error);
       return;
     }
     setPainTarget(null);
     setNote("");
-    await reload(currentUser.playerId);
+    await reload();
   };
 
   const handleNoteSave = async () => {
     if (!currentUser || !noteTarget) return;
     if (editingNoteId) {
       const res = await updateInjuryNote({
-        playerId: currentUser.playerId,
         noteId: editingNoteId,
         content: noteContent,
       });
       if (!res.success) {
-        window.alert(res.error);
+        setNotice(res.error);
         return;
       }
       setNoteTarget(null);
       setEditingNoteId(null);
       setNoteContent("");
-      await reload(currentUser.playerId);
+      await reload();
       return;
     }
     const res = await addInjuryNote({
-      playerId: currentUser.playerId,
       caseId: noteTarget.item.id,
       kind: noteTarget.kind,
       date: getTodayDateStr(),
       content: noteContent,
     });
     if (!res.success) {
-      window.alert(res.error);
+      setNotice(res.error);
       return;
     }
     setNoteTarget(null);
     setNoteContent("");
-    await reload(currentUser.playerId);
+    await reload();
   };
 
-  if (!isMounted || !currentUser) return null;
+  if (!isMounted || !currentUser) return <PageLoading />;
 
   const active = cases.filter((c) => c.status === "active");
   const recovered = cases.filter((c) => c.status === "recovered");
@@ -219,6 +218,11 @@ export default function InjuryPage() {
         {loadError && (
           <p className="border border-red-300 bg-red-50 p-3 text-sm text-red-700">
             {loadError}
+          </p>
+        )}
+        {notice && (
+          <p className="border border-zinc-300 bg-white p-3 text-sm text-zinc-700">
+            {notice}
           </p>
         )}
         <div className="flex gap-1">
@@ -255,103 +259,23 @@ export default function InjuryPage() {
           </button>
         )}
         {showNew && (
-          <div className="flex flex-col gap-3 border border-zinc-900 bg-white p-4">
-            <label className="text-xs uppercase text-gray-500">部位</label>
-            <div className="flex flex-wrap gap-1">
-              {PAIN_AREA_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setPainArea(opt.value)}
-                  className={`border px-2 py-1 text-xs ${
-                    painArea === opt.value
-                      ? "border-zinc-900 bg-zinc-900 text-white"
-                      : "border-zinc-300"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-            <input
-              placeholder="更具体的位置（可选）"
-              value={locationHint}
-              onChange={(e) => setLocationHint(e.target.value)}
-              className="border border-zinc-300 px-3 py-2 text-sm"
-            />
-            <label className="text-xs uppercase text-gray-500">种类</label>
-            <div className="flex flex-wrap gap-1">
-              {INJURY_KIND_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setInjuryKind(opt.id)}
-                  className={`border px-2 py-1 text-xs ${
-                    injuryKind === opt.id
-                      ? "border-zinc-900 bg-zinc-900 text-white"
-                      : "border-zinc-300"
-                  }`}
-                  title={opt.hint}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-            {!editingCaseId ? (
-              <>
-            <label className="text-xs uppercase text-gray-500">
-              疼痛 0–10
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={10}
-              value={painScore}
-              onChange={(e) => setPainScore(Number(e.target.value))}
-              className="accent-zinc-900"
-            />
-            <span className="text-right font-mono text-sm">{painScore}</span>
-            <div className="flex flex-wrap gap-1">
-              {PAIN_EXERCISE_RELATION_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => toggleRelation(opt.id)}
-                  className={`border px-2 py-1 text-xs ${
-                    relations.includes(opt.id)
-                      ? "border-zinc-900 bg-zinc-900 text-white"
-                      : "border-zinc-300"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-            <textarea
-              placeholder="备注（可选）"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              className="min-h-16 border border-zinc-300 px-3 py-2 text-sm"
-            />
-              </>
-            ) : null}
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => void handleCreate()}
-                className="flex-1 bg-black py-2 text-sm text-white"
-              >
-                {editingCaseId ? "保存修改" : "保存"}
-              </button>
-              <button
-                type="button"
-                onClick={resetForm}
-                className="flex-1 border border-zinc-300 py-2 text-sm"
-              >
-                取消
-              </button>
-            </div>
-          </div>
+          <InjuryCaseForm
+            painArea={painArea}
+            locationHint={locationHint}
+            injuryKind={injuryKind}
+            painScore={painScore}
+            relations={relations}
+            note={note}
+            editingCaseId={editingCaseId}
+            onPainArea={setPainArea}
+            onLocationHint={setLocationHint}
+            onInjuryKind={setInjuryKind}
+            onPainScore={setPainScore}
+            onToggleRelation={toggleRelation}
+            onNote={setNote}
+            onSave={() => void handleCreate()}
+            onCancel={resetForm}
+          />
         )}
         {visible.length === 0 ? (
           <p className="text-sm text-zinc-400">
@@ -377,11 +301,10 @@ export default function InjuryPage() {
               onRecover={async (c) => {
                 if (!currentUser) return;
                 const res = await markInjuryRecovered({
-                  playerId: currentUser.playerId,
                   caseId: c.id,
                 });
-                if (!res.success) window.alert(res.error);
-                else await reload(currentUser.playerId);
+                if (!res.success) setNotice(res.error);
+                else await reload();
               }}
               onRelapse={(c) => {
                 setPainArea(c.painArea);
@@ -402,11 +325,10 @@ export default function InjuryPage() {
               onDeleteCase={async (c) => {
                 if (!currentUser) return;
                 const res = await deleteInjuryCase({
-                  playerId: currentUser.playerId,
                   caseId: c.id,
                 });
-                if (!res.success) window.alert(res.error);
-                else await reload(currentUser.playerId);
+                if (!res.success) setNotice(res.error);
+                else await reload();
               }}
               onEditPain={(c, log) => {
                 setPainTarget(c);
@@ -418,11 +340,10 @@ export default function InjuryPage() {
               onDeletePain={async (log) => {
                 if (!currentUser) return;
                 const res = await deleteInjuryPainLog({
-                  playerId: currentUser.playerId,
                   logId: log.id,
                 });
-                if (!res.success) window.alert(res.error);
-                else await reload(currentUser.playerId);
+                if (!res.success) setNotice(res.error);
+                else await reload();
               }}
               onEditNote={(c, noteRow) => {
                 setNoteTarget({ item: c, kind: noteRow.kind });
@@ -432,99 +353,43 @@ export default function InjuryPage() {
               onDeleteNote={async (noteRow) => {
                 if (!currentUser) return;
                 const res = await deleteInjuryNote({
-                  playerId: currentUser.playerId,
                   noteId: noteRow.id,
                 });
-                if (!res.success) window.alert(res.error);
-                else await reload(currentUser.playerId);
+                if (!res.success) setNotice(res.error);
+                else await reload();
               }}
             />
           ))
         )}
         {painTarget && (
-          <div className="flex flex-col gap-2 border border-zinc-900 bg-white p-4">
-            <p className="text-sm">
-              {editingPainLogId ? "修改今日疼痛" : "今日疼痛"} ·{" "}
-              {painTarget.painAreaLabel}
-            </p>
-            <input
-              type="range"
-              min={0}
-              max={10}
-              value={painScore}
-              onChange={(e) => setPainScore(Number(e.target.value))}
-              className="accent-zinc-900"
-            />
-            <span className="text-right font-mono text-sm">{painScore}</span>
-            <div className="flex flex-wrap gap-1">
-              {PAIN_EXERCISE_RELATION_OPTIONS.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => toggleRelation(opt.id)}
-                  className={`border px-2 py-1 text-xs ${
-                    relations.includes(opt.id)
-                      ? "border-zinc-900 bg-zinc-900 text-white"
-                      : "border-zinc-300"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => void handlePainSave()}
-                className="flex-1 bg-black py-2 text-sm text-white"
-              >
-                {editingPainLogId ? "保存修改" : "记录"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setPainTarget(null);
-                  setEditingPainLogId(null);
-                }}
-                className="flex-1 border py-2 text-sm"
-              >
-                取消
-              </button>
-            </div>
-          </div>
+          <InjuryPainForm
+            title={`${editingPainLogId ? "修改今日疼痛" : "今日疼痛"} · ${painTarget.painAreaLabel}`}
+            painScore={painScore}
+            relations={relations}
+            editing={Boolean(editingPainLogId)}
+            onPainScore={setPainScore}
+            onToggleRelation={toggleRelation}
+            onSave={() => void handlePainSave()}
+            onCancel={() => {
+              setPainTarget(null);
+              setEditingPainLogId(null);
+            }}
+          />
         )}
         {noteTarget && (
-          <div className="flex flex-col gap-2 border border-zinc-900 bg-white p-4">
-            <p className="text-sm">
-              {editingNoteId ? "修改备注" : ""}
-              {noteTarget.kind === "treatment" ? "诊疗备注" : "康复备注"} ·{" "}
-              {noteTarget.item.painAreaLabel}
-            </p>
-            <textarea
-              value={noteContent}
-              onChange={(e) => setNoteContent(e.target.value)}
-              className="min-h-20 border border-zinc-300 px-3 py-2 text-sm"
-            />
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => void handleNoteSave()}
-                className="flex-1 bg-black py-2 text-sm text-white"
-              >
-                {editingNoteId ? "保存修改" : "保存"}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setNoteTarget(null);
-                  setEditingNoteId(null);
-                }}
-                className="flex-1 border py-2 text-sm"
-              >
-                取消
-              </button>
-            </div>
-          </div>
+          <InjuryNoteForm
+            title={`${editingNoteId ? "修改备注" : ""}${
+              noteTarget.kind === "treatment" ? "诊疗备注" : "康复备注"
+            } · ${noteTarget.item.painAreaLabel}`}
+            content={noteContent}
+            editing={Boolean(editingNoteId)}
+            onContent={setNoteContent}
+            onSave={() => void handleNoteSave()}
+            onCancel={() => {
+              setNoteTarget(null);
+              setEditingNoteId(null);
+            }}
+          />
         )}
       </main>
     </div>

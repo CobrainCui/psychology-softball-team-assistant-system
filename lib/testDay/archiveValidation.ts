@@ -1,17 +1,27 @@
 // 测试日归档：空校验与 playerId 收集（actions 与 API 共用）
 
-import type {
-  FlyCatchAttempt,
-  HitRecord,
-  SpeedColumn,
-  SpeedMark,
-  SpeedRecord,
-  StrikeJudgeCell,
-  StrikeJudgeColumn,
-  ThrowPlay,
+import {
+  HIT_RESULT_VALUES,
+  isHitRecord,
+  isSpeedMark,
+  type FlyCatchAttempt,
+  type HitRecord,
+  type SpeedColumn,
+  type SpeedMark,
+  type SpeedRecord,
+  type StrikeJudgeCell,
+  type StrikeJudgeColumn,
+  type ThrowPlay,
 } from "@/lib/gameArchive";
 import type { Assignments } from "@/lib/sessionDraft";
 import type { AssignmentCommit } from "@/lib/testDay/assignmentLog";
+import {
+  collectCustomTestPlayerIds,
+  customTestSliceHasContent,
+  parseCustomTestSlice,
+  type CustomTestSlice,
+} from "@/lib/testDay/customTests";
+import { speedRecordsFromGrid } from "@/lib/testDay/speedGrid";
 
 export type SessionArchivePayload = {
   hits: HitRecord[];
@@ -25,6 +35,10 @@ export type SessionArchivePayload = {
   assignments?: Assignments;
   testItems?: string[];
   assignmentLog?: AssignmentCommit[];
+  customTestDefs?: CustomTestSlice["customTestDefs"];
+  customPlayerNotes?: CustomTestSlice["customPlayerNotes"];
+  customGroupNotes?: CustomTestSlice["customGroupNotes"];
+  customSingleNotes?: CustomTestSlice["customSingleNotes"];
 };
 
 export function normalizeSessionArchivePayload(
@@ -40,8 +54,18 @@ export function normalizeSessionArchivePayload(
     | "strikeJudgeColumns"
     | "strikeJudgeCells"
     | "throwPlays"
+    | "customTestDefs"
+    | "customPlayerNotes"
+    | "customGroupNotes"
+    | "customSingleNotes"
   >
 > {
+  const custom = parseCustomTestSlice({
+    customTestDefs: payload.customTestDefs,
+    customPlayerNotes: payload.customPlayerNotes,
+    customGroupNotes: payload.customGroupNotes,
+    customSingleNotes: payload.customSingleNotes,
+  });
   return {
     hits: Array.isArray(payload.hits) ? payload.hits : [],
     speedRecords: Array.isArray(payload.speedRecords) ? payload.speedRecords : [],
@@ -59,6 +83,10 @@ export function normalizeSessionArchivePayload(
       ? payload.strikeJudgeCells
       : [],
     throwPlays: Array.isArray(payload.throwPlays) ? payload.throwPlays : [],
+    customTestDefs: custom.customTestDefs,
+    customPlayerNotes: custom.customPlayerNotes,
+    customGroupNotes: custom.customGroupNotes,
+    customSingleNotes: custom.customSingleNotes,
   };
 }
 
@@ -71,7 +99,8 @@ export function sessionArchiveHasContent(payload: SessionArchivePayload): boolea
     data.speedMarks.length > 0 ||
     data.flyCatchAttempts.length > 0 ||
     data.strikeJudgeCells.length > 0 ||
-    data.throwPlays.length > 0
+    data.throwPlays.length > 0 ||
+    customTestSliceHasContent(data)
   );
 }
 
@@ -103,6 +132,55 @@ export function collectSessionArchivePlayerIds(
     if (play.throwerId) ids.add(play.throwerId);
     if (play.firstBaseId) ids.add(play.firstBaseId);
   }
+  for (const playerId of collectCustomTestPlayerIds(data)) {
+    ids.add(playerId);
+  }
 
   return [...ids];
+}
+
+const HIT_RESULT_SET: ReadonlySet<string> = new Set(HIT_RESULT_VALUES);
+
+// 推导步骤：前端盘面 → 过滤非法打点/秒数 → 派生 speedRecords → 交给 saveTestSession
+export function buildClientArchivePayload(input: {
+  hits: HitRecord[];
+  speedColumns: SpeedColumn[];
+  speedMarks: SpeedMark[];
+  flyCatchAttempts: FlyCatchAttempt[];
+  strikeJudgeColumns: StrikeJudgeColumn[];
+  strikeJudgeCells: StrikeJudgeCell[];
+  throwPlays: ThrowPlay[];
+  assignments: Assignments;
+  testItems: string[];
+  assignmentLog: AssignmentCommit[];
+  customTestDefs?: CustomTestSlice["customTestDefs"];
+  customPlayerNotes?: CustomTestSlice["customPlayerNotes"];
+  customGroupNotes?: CustomTestSlice["customGroupNotes"];
+  customSingleNotes?: CustomTestSlice["customSingleNotes"];
+}): SessionArchivePayload {
+  const speedMarks = Array.isArray(input.speedMarks)
+    ? input.speedMarks.filter(isSpeedMark)
+    : [];
+  const hits = Array.isArray(input.hits)
+    ? input.hits.filter(
+        (hit) => isHitRecord(hit) && HIT_RESULT_SET.has(hit.result)
+      )
+    : [];
+  return {
+    hits,
+    speedRecords: speedRecordsFromGrid(speedMarks),
+    speedColumns: input.speedColumns,
+    speedMarks,
+    flyCatchAttempts: input.flyCatchAttempts,
+    strikeJudgeColumns: input.strikeJudgeColumns,
+    strikeJudgeCells: input.strikeJudgeCells,
+    throwPlays: input.throwPlays,
+    assignments: input.assignments,
+    testItems: input.testItems,
+    assignmentLog: input.assignmentLog,
+    customTestDefs: input.customTestDefs,
+    customPlayerNotes: input.customPlayerNotes,
+    customGroupNotes: input.customGroupNotes,
+    customSingleNotes: input.customSingleNotes,
+  };
 }

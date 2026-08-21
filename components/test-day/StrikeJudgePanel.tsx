@@ -6,8 +6,9 @@ import type {
   StrikeJudgeCell,
   StrikeJudgeColumn,
 } from "@/lib/gameArchive";
+import { RecordActions } from "@/components/records/RecordActions";
+import CollapsedRateCard from "@/components/test-day/CollapsedRateCard";
 import {
-  columnStrikeRate,
   isStrikeJudgeCorrect,
   judgeAccuracyRates,
   pitcherStrikeRates,
@@ -82,27 +83,9 @@ export default function StrikeJudgePanel({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid gap-2 text-xs text-zinc-600 md:grid-cols-2">
-        <div>
-          <p className="mb-1 font-medium text-zinc-800">判断正确率</p>
-          <ul className="flex flex-col gap-0.5">
-            {judgeRates.map((row) => (
-              <li key={row.playerId}>
-                {row.playerName}：{row.label}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <p className="mb-1 font-medium text-zinc-800">投手好球率</p>
-          <ul className="flex flex-col gap-0.5">
-            {pitcherRates.map((row) => (
-              <li key={row.playerId}>
-                {row.playerName}：{row.label}
-              </li>
-            ))}
-          </ul>
-        </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <CollapsedRateCard title="判断正确率" rows={judgeRates} />
+        <CollapsedRateCard title="投手好球率" rows={pitcherRates} />
       </div>
 
       <div className="overflow-x-auto border border-zinc-300">
@@ -129,9 +112,6 @@ export default function StrikeJudgePanel({
                 >
                   <div className="font-bold text-zinc-900">
                     {column.pitcherName}
-                  </div>
-                  <div className="text-[10px] text-zinc-500">
-                    好球率 {columnStrikeRate(column.id, cells)}
                   </div>
                   <div className="text-[10px] text-zinc-400">长按列头拖动</div>
                   <button
@@ -188,7 +168,10 @@ export default function StrikeJudgePanel({
                         type="button"
                         disabled={disabled}
                         onClick={() =>
-                          setSelection({ columnId: column.id, judgeId: judge.id })
+                          setSelection({
+                            columnId: column.id,
+                            judgeId: judge.id,
+                          })
                         }
                         className={`min-h-8 w-full px-1 py-1 ${
                           isSelected
@@ -219,7 +202,7 @@ export default function StrikeJudgePanel({
             }
             {selectedCell ? `（当前 ${cellSummary(selectedCell)}）` : ""}
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {(
               [
                 ["strike", true, "好球 + 挥棒"],
@@ -249,17 +232,13 @@ export default function StrikeJudgePanel({
                 {label}
               </button>
             ))}
-            <button
-              type="button"
-              onClick={() => {
-                if (!confirm("确认删除这一格？")) return;
+            <RecordActions
+              onDelete={() => {
                 onClearCell(selection.columnId, selection.judgeId);
                 setSelection(null);
               }}
-              className="border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-            >
-              删除
-            </button>
+              deleteConfirm="确认删除这一格？"
+            />
           </div>
         </div>
       ) : null}

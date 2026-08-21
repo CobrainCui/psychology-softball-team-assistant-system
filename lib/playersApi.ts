@@ -1,5 +1,6 @@
 // 名册云端仓库：API 为权威源；成功后回写 localStorage 作缓存。
 
+import type { ActionResult } from "@/lib/actionResult";
 import {
   loadPlayers,
   normalizePlayerRole,
@@ -71,7 +72,7 @@ export async function createPlayer(input: {
 export async function updatePlayer(
   id: string,
   patch: Partial<Pick<Player, "name" | "gender" | "role">>
-): Promise<Player | null> {
+): Promise<ActionResult<{ player: Player }>> {
   try {
     const res = await fetch(`/api/players/${id}`, {
       method: "PATCH",
@@ -80,16 +81,16 @@ export async function updatePlayer(
     });
     if (!res.ok) {
       console.error("云端被拒:", `players PATCH ${res.status}`);
-      return null;
+      return { success: false, error: `同步失败（${res.status}）` };
     }
     const player = toPlayer(await res.json());
-    if (!player) return null;
+    if (!player) return { success: false, error: "返回数据无效" };
     savePlayers(
       loadPlayers().map((row) => (row.id === id ? player : row))
     );
-    return player;
+    return { success: true, player };
   } catch (error) {
     console.error("云端被拒:", error);
-    return null;
+    return { success: false, error: "网络异常，请稍后重试" };
   }
 }

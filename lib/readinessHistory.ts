@@ -6,6 +6,8 @@ import type { Scale5 } from "@/lib/clinical/preDimensions";
 import { clampScale5 } from "@/lib/clinical/preDimensions";
 import type { PreQuadrant } from "@/lib/clinical/preQuadrant";
 
+export { getTodayDateStr } from "@/lib/dateOnly";
+
 export type ReadinessHistoryEntry = {
   playerId: string;
   date: string;
@@ -25,10 +27,6 @@ const QUADRANTS = new Set<PreQuadrant>([
   "injury_risk",
   "peak",
 ]);
-
-export function getTodayDateStr(today: Date = new Date()): string {
-  return today.toISOString().slice(0, 10);
-}
 
 function isReadinessHistoryEntry(
   value: unknown

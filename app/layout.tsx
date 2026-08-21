@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Navbar from "@/components/Navbar";
 import SiteFooter from "@/components/SiteFooter";
+import PendingClaimGate from "@/components/auth/PendingClaimGate";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -32,7 +33,9 @@ export default function RootLayout({
       {/* 打印防呆：取消强制全屏高度与 flex 布局，避免打印时出现空白页或内容被裁切 */}
       <body className="flex min-h-full flex-col bg-white text-zinc-900 print:block print:min-h-0">
         <Navbar />
-        <div className="flex min-h-0 flex-1 flex-col bg-zinc-50">{children}</div>
+        <div className="flex min-h-0 flex-1 flex-col bg-zinc-50">
+          <PendingClaimGate>{children}</PendingClaimGate>
+        </div>
         <SiteFooter />
       </body>
     </html>

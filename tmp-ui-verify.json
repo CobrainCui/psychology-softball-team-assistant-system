@@ -1,0 +1,41 @@
+{
+  "findings": [
+    {
+      "level": "pass",
+      "msg": "quadrant 4,4 → peak"
+    },
+    {
+      "level": "pass",
+      "msg": "quadrant 4,2 → slack"
+    },
+    {
+      "level": "pass",
+      "msg": "quadrant 2.5,1 → real_fatigue"
+    },
+    {
+      "level": "pass",
+      "msg": "quadrant 2.5,4 → injury_risk"
+    },
+    {
+      "level": "pass",
+      "msg": "battery all-3 → 3"
+    },
+    {
+      "level": "pass",
+      "msg": "all-5 feedback peak"
+    },
+    {
+      "level": "pass",
+      "msg": "anonymous / redirects to /login"
+    },
+    {
+      "level": "pass",
+      "msg": "setup route reachable or redirects when already initialized"
+    },
+    {
+      "level": "fail",
+      "msg": "uncaught: \nInvalid `prisma.team.findFirst()` invocation in\nD:\\workspace\\softball-ai-system\\lib\\team.ts:6:32\n\n  3 const DEFAULT_TEAM_NAME = \"心理学部队\";\n  4 \n  5 export async function getOrCreateDefaultTeam() {\n→ 6   let team = await prisma.team.findFirst(\nThe column `Team.timeZone` does not exist in the current database."
+    }
+  ],
+  "failCount": 1
+}

@@ -67,9 +67,60 @@ export function formatAssignmentPair(
   pair: AssignmentPair,
   players: { id: string; name: string }[]
 ): string {
-  const name =
-    players.find((player) => player.id === pair.playerId)?.name ?? pair.playerId;
-  return `${name}→${pair.testItem}`;
+  return formatAssignmentPairs([pair], players);
+}
+
+// 推导步骤：按队员归并项目，一人多项写成「张三→接高飞、好球判断」；人与人之间用分号
+export function formatAssignmentPairs(
+  pairs: AssignmentPair[],
+  players: { id: string; name: string }[]
+): string {
+  const groups: { playerId: string; items: string[] }[] = [];
+  const indexByPlayer = new Map<string, number>();
+  for (const pair of pairs) {
+    const existing = indexByPlayer.get(pair.playerId);
+    if (existing === undefined) {
+      indexByPlayer.set(pair.playerId, groups.length);
+      groups.push({ playerId: pair.playerId, items: [pair.testItem] });
+    } else {
+      groups[existing].items.push(pair.testItem);
+    }
+  }
+  return groups
+    .map((group) => {
+      const name =
+        players.find((player) => player.id === group.playerId)?.name ??
+        group.playerId;
+      return `${name}→${group.items.join("、")}`;
+    })
+    .join("；");
+}
+
+export function buildAssignmentCommitHeadline(
+  author: string,
+  isRevision: boolean
+): string {
+  const verb = isRevision ? "进行了一次测试报名修改" : "进行了一次测试报名";
+  return `${author}${verb}`;
+}
+
+export function buildAssignmentCommitDetailLines(input: {
+  added: AssignmentPair[];
+  removed: AssignmentPair[];
+  note?: string;
+  players: { id: string; name: string }[];
+}): string[] {
+  const lines: string[] = [];
+  if (input.added.length) {
+    lines.push(`添加 ${formatAssignmentPairs(input.added, input.players)}`);
+  }
+  if (input.removed.length) {
+    lines.push(`删除 ${formatAssignmentPairs(input.removed, input.players)}`);
+  }
+  if (input.note) {
+    lines.push(`备注：${input.note}`);
+  }
+  return lines;
 }
 
 // 推导步骤：首次保存用「测试报名」；之后用「测试报名修改」+ 添加/删除 + 可选备注
@@ -81,17 +132,9 @@ export function buildAssignmentCommitSummary(input: {
   note?: string;
   players: { id: string; name: string }[];
 }): string {
-  const addText = input.added.length
-    ? `添加 ${input.added.map((pair) => formatAssignmentPair(pair, input.players)).join("、")}`
-    : "";
-  const removeText = input.removed.length
-    ? `删除 ${input.removed.map((pair) => formatAssignmentPair(pair, input.players)).join("、")}`
-    : "";
-  const changeParts = [addText, removeText].filter(Boolean);
-  const changeText = changeParts.length > 0 ? `，${changeParts.join("，")}` : "";
-  const noteText = input.note ? `，备注：${input.note}` : "";
-  const verb = input.isRevision ? "进行了一次测试报名修改" : "进行了一次测试报名";
-  return `${input.author}${verb}${changeText}${noteText}`;
+  const headline = buildAssignmentCommitHeadline(input.author, input.isRevision);
+  const details = buildAssignmentCommitDetailLines(input);
+  return details.length > 0 ? `${headline}，${details.join("，")}` : headline;
 }
 
 export function isAssignmentCommit(value: unknown): value is AssignmentCommit {

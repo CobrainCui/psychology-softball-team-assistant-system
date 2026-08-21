@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { ensureDefaultTeam } from "@/lib/ensureTeam";
 import {
   sessionArchiveInclude,
   sessionToGameArchive,
@@ -12,12 +11,18 @@ import {
   type SessionArchivePayload,
 } from "@/lib/testDay/archiveValidation";
 import { buildTestSessionCreateInput } from "@/lib/testDay/sessionArchiveWrite";
+import {
+  requireApiApproved,
+  requireApiArchiver,
+} from "@/lib/auth/apiGuard";
 
 export async function GET() {
   try {
-    const team = await ensureDefaultTeam();
+    const gate = await requireApiApproved();
+    if (!gate.ok) return gate.response;
+
     const sessions = await prisma.testSession.findMany({
-      where: { teamId: team.id },
+      where: { teamId: gate.ctx.teamId },
       orderBy: { archivedAt: "asc" },
       include: sessionArchiveInclude,
     });
@@ -30,6 +35,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const gate = await requireApiArchiver();
+    if (!gate.ok) return gate.response;
+
     const body: unknown = await request.json();
     if (!body || typeof body !== "object") {
       return NextResponse.json({ error: "无效请求体" }, { status: 400 });
@@ -42,10 +50,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "归档内容为空" }, { status: 400 });
     }
 
-    const team = await ensureDefaultTeam();
+    const teamId = gate.ctx.teamId;
     const playerIds = collectSessionArchivePlayerIds(data);
     const existing = await prisma.player.findMany({
-      where: { teamId: team.id, id: { in: playerIds } },
+      where: { teamId, id: { in: playerIds } },
       select: { id: true },
     });
     if (existing.length !== playerIds.length) {
@@ -56,7 +64,7 @@ export async function POST(request: Request) {
     }
 
     const archivedAt = new Date();
-    const prismaData = buildTestSessionCreateInput(payload, team.id, archivedAt);
+    const prismaData = buildTestSessionCreateInput(payload, teamId, archivedAt);
 
     const session = await prisma.testSession.create({
       data: prismaData,

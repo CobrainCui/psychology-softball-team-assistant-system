@@ -1,6 +1,6 @@
 "use client";
 
-import type { CoachPlotPoint } from "@/lib/statusActions";
+import type { CoachPlotPoint } from "@/lib/status/coachActions";
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));

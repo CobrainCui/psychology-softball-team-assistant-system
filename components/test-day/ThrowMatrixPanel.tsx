@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { ThrowBlame, ThrowPlay, ThrowTestItem } from "@/lib/gameArchive";
+import { RecordActions } from "@/components/records/RecordActions";
+import CollapsedRateCard from "@/components/test-day/CollapsedRateCard";
 import {
   firstBaseSuccessRates,
   throwerSuccessRates,
@@ -75,9 +77,7 @@ export default function ThrowMatrixPanel({
   const commitSuccess = (success: boolean, blame?: ThrowBlame) => {
     if (!selection || !selectedThrower || !selectedFirstBase) return;
     onUpsertPlay({
-      id:
-        selectedPlay?.id ??
-        crypto.randomUUID(),
+      id: selectedPlay?.id ?? crypto.randomUUID(),
       testItem,
       throwerId: selectedThrower.id,
       throwerName: selectedThrower.name,
@@ -86,7 +86,8 @@ export default function ThrowMatrixPanel({
       success,
       blame: success ? undefined : blame,
       note: noteDraft.trim() || undefined,
-      timestamp: Date.now(),
+      // 事件回调内记录时刻；非 render 期
+      timestamp: Date.now(), // eslint-disable-line react-hooks/purity
     });
     setPendingFailure(false);
     setNoteDraft(selectedPlay?.note ?? "");
@@ -94,27 +95,9 @@ export default function ThrowMatrixPanel({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid gap-2 text-xs text-zinc-600 md:grid-cols-2">
-        <div>
-          <p className="mb-1 font-medium text-zinc-800">传球手成功率</p>
-          <ul className="flex flex-col gap-0.5">
-            {throwerRates.map((row) => (
-              <li key={row.playerId}>
-                {row.playerName}：{row.label}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <p className="mb-1 font-medium text-zinc-800">一垒手成功率</p>
-          <ul className="flex flex-col gap-0.5">
-            {firstBaseRates.map((row) => (
-              <li key={row.playerId}>
-                {row.playerName}：{row.label}
-              </li>
-            ))}
-          </ul>
-        </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <CollapsedRateCard title="传球手成功率" rows={throwerRates} />
+        <CollapsedRateCard title="一垒手成功率" rows={firstBaseRates} />
       </div>
 
       <div className="overflow-x-auto border border-zinc-300">
@@ -196,7 +179,7 @@ export default function ThrowMatrixPanel({
             className="w-full border border-zinc-300 bg-white px-2 py-1 text-sm"
           />
           {!pendingFailure ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => commitSuccess(true)}
@@ -211,19 +194,19 @@ export default function ThrowMatrixPanel({
               >
                 失败
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!confirm("确认删除这一格？")) return;
-                  onClearPlay(testItem, selection.throwerId, selection.firstBaseId);
+              <RecordActions
+                onDelete={() => {
+                  onClearPlay(
+                    testItem,
+                    selection.throwerId,
+                    selection.firstBaseId
+                  );
                   setSelection(null);
                   setNoteDraft("");
                   setPendingFailure(false);
                 }}
-                className="border border-red-300 px-3 py-2 text-xs text-red-600 hover:bg-red-50"
-              >
-                删除
-              </button>
+                deleteConfirm="确认删除这一格？"
+              />
             </div>
           ) : (
             <div className="flex flex-col gap-2">

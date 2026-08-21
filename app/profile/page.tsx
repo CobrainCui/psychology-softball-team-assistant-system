@@ -1,22 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { setStoredCurrentUser } from "@/lib/currentUser";
+import MedicalDisclaimer from "@/components/MedicalDisclaimer";
+import PageLoading from "@/components/PageLoading";
+import { useRequireAuth } from "@/lib/useRequireAuth";
 import {
   type HitRecord,
   type HitResult,
   type SpeedRecord,
 } from "@/lib/gameArchive";
-import { getPlayerProfileData } from "@/lib/actions";
+import { getPlayerProfileData } from "@/lib/status/profileActions";
+import { requestRoleChange } from "@/lib/auth/roleActions";
 import { updatePlayer } from "@/lib/playersApi";
 import { loadPlayerReadinessHistory } from "@/lib/readinessHistory";
 import { loadPlayerInjuryCaseDrafts } from "@/lib/injuryCases";
 import { PAIN_AREA_LABEL } from "@/lib/clinical/painAreas";
 import { quadrantLabel } from "@/lib/clinical/preQuadrant";
-import { useRequireAuth } from "@/lib/useRequireAuth";
 import SoftballFieldSvg from "@/components/test-day/SoftballFieldSvg";
-import type { ProfileInjuryBrief, ProfileLatestStatus } from "@/lib/statusActions";
+import type { ProfileInjuryBrief, ProfileLatestStatus } from "@/lib/status/profileActions";
 import type { BodyInsight30dReport } from "@/lib/clinical/bodyInsight30d";
+import SeasonReportCard from "@/components/season/SeasonReportCard";
 
 const formatPercent = (value: number): string => {
   if (!Number.isFinite(value) || value < 0) return "0.0%";
@@ -90,61 +93,64 @@ export default function ProfilePage() {
   );
   const [insight, setInsight] = useState<BodyInsight30dReport | null>(null);
   const [showInsight, setShowInsight] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
+    if (!currentUser.playerId) return;
     let cancelled = false;
-    setDisplayName(currentUser.playerName);
-    const readiness = loadPlayerReadinessHistory(currentUser.playerId);
-    if (readiness[0]) {
-      setLatestStatus({
-        date: readiness[0].date,
-        quadrant: readiness[0].quadrant,
-        quadrantLabel: quadrantLabel(readiness[0].quadrant),
-        physicalBattery: readiness[0].physicalBattery,
-        mentalDrive: readiness[0].mentalDrive,
-      });
-    }
-    const drafts = loadPlayerInjuryCaseDrafts(currentUser.playerId);
-    if (drafts.length > 0) {
-      setInjuryCases(
-        drafts.slice(0, 8).map((c) => ({
-          id: c.id,
-          painAreaLabel: PAIN_AREA_LABEL[c.painArea],
-          status: c.status,
-          latestPain: c.painLogs.at(-1)?.painScore ?? null,
-          trendLabel: "",
-          startDate: c.startDate,
-        }))
-      );
-    }
-    setIsLoading(true);
-
-    (async () => {
-      const res = await getPlayerProfileData(currentUser.playerId);
-      if (cancelled) return;
-      if (!res.success) {
-        console.error("云端被拒:", res.error);
-        setHits([]);
-        setSpeedRecords([]);
-        setSessionCount(0);
-      } else {
-        setHits(res.hits);
-        setSpeedRecords(res.speedRecords);
-        setSessionCount(res.sessionCount);
-        setInjuryCases(res.injuryCases);
-        setLatestStatus(res.latestStatus);
-        setInsight(res.insight);
+    const timer = window.setTimeout(() => {
+      setDisplayName(currentUser.playerName ?? currentUser.username);
+      const readiness = loadPlayerReadinessHistory(currentUser.playerId!);
+      if (readiness[0]) {
+        setLatestStatus({
+          date: readiness[0].date,
+          quadrant: readiness[0].quadrant,
+          quadrantLabel: quadrantLabel(readiness[0].quadrant),
+          physicalBattery: readiness[0].physicalBattery,
+          mentalDrive: readiness[0].mentalDrive,
+        });
       }
-      setIsLoading(false);
-    })();
-
+      const drafts = loadPlayerInjuryCaseDrafts(currentUser.playerId!);
+      if (drafts.length > 0) {
+        setInjuryCases(
+          drafts.slice(0, 8).map((c) => ({
+            id: c.id,
+            painAreaLabel: PAIN_AREA_LABEL[c.painArea],
+            status: c.status,
+            latestPain: c.painLogs.at(-1)?.painScore ?? null,
+            trendLabel: "",
+            startDate: c.startDate,
+          }))
+        );
+      }
+      setIsLoading(true);
+      void (async () => {
+        const res = await getPlayerProfileData();
+        if (cancelled) return;
+        if (!res.success) {
+          console.error("云端被拒:", res.error);
+          setHits([]);
+          setSpeedRecords([]);
+          setSessionCount(0);
+        } else {
+          setHits(res.hits);
+          setSpeedRecords(res.speedRecords);
+          setSessionCount(res.sessionCount);
+          setInjuryCases(res.injuryCases);
+          setLatestStatus(res.latestStatus);
+          setInsight(res.insight);
+        }
+        setIsLoading(false);
+      })();
+    }, 0);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [isMounted, currentUser?.playerId, currentUser?.playerName]);
+  }, [isMounted, currentUser]);
 
-  if (!isMounted || !currentUser) return null;
+  if (!isMounted || !currentUser) return <PageLoading />;
 
   if (isLoading) {
     return (
@@ -157,7 +163,7 @@ export default function ProfilePage() {
   }
 
   const handleStartEditName = () => {
-    setEditNameValue(displayName || currentUser.playerName);
+    setEditNameValue(displayName || currentUser.playerName || currentUser.username);
     setIsEditingName(true);
   };
 
@@ -165,16 +171,15 @@ export default function ProfilePage() {
     const trimmedName = editNameValue.trim();
     if (!trimmedName) return;
 
+    if (!currentUser.playerId) return;
     const updated = await updatePlayer(currentUser.playerId, {
       name: trimmedName,
     });
-    if (!updated) {
-      window.alert("同步姓名失败，请检查网络后重试。");
+    if (!updated.success) {
+      setNotice(updated.error);
       return;
     }
 
-    const updatedUser = { ...currentUser, playerName: trimmedName };
-    setStoredCurrentUser(updatedUser);
     setDisplayName(trimmedName);
     setIsEditingName(false);
   };
@@ -205,6 +210,12 @@ export default function ProfilePage() {
           </h1>
         </div>
 
+        <MedicalDisclaimer />
+        {notice ? (
+          <p className="border border-zinc-300 bg-white p-3 text-sm text-zinc-700">
+            {notice}
+          </p>
+        ) : null}
         <div className="border border-zinc-200 p-4 text-center">
           {isEditingName ? (
             <div className="flex items-center justify-center gap-2">
@@ -220,7 +231,7 @@ export default function ProfilePage() {
                 onClick={() => void handleSaveName()}
                 className="shrink-0 px-2 py-1 text-xs text-zinc-500 transition-colors hover:text-zinc-900"
               >
-                💾 保存
+                保存
               </button>
             </div>
           ) : (
@@ -233,16 +244,51 @@ export default function ProfilePage() {
                 onClick={handleStartEditName}
                 className="shrink-0 px-2 py-1 text-xs text-zinc-400 transition-colors hover:text-zinc-700"
               >
-                ✏️ 修改名称
+                修改名称
               </button>
             </div>
           )}
           <p className="mt-1 text-xs uppercase tracking-wide text-zinc-400">
             {currentUser.gender === "male" ? "男" : "女"}
             {" · "}
-            {currentUser.role === "coach" ? "教练" : "队员"}
+            {currentUser.roles.includes("coach")
+              ? "教练"
+              : currentUser.roles.includes("captain")
+                ? "队长"
+                : "队员"}
           </p>
         </div>
+
+        {currentUser.claimStatus === "approved" &&
+        (!currentUser.roles.includes("captain") ||
+          !currentUser.roles.includes("coach")) ? (
+          <div className="flex justify-center gap-4 text-xs text-zinc-600">
+            {!currentUser.roles.includes("captain") ? (
+              <button
+                type="button"
+                className="underline"
+                onClick={async () => {
+                  const res = await requestRoleChange("captain");
+                  setNotice(res.success ? "已提交队长申请，待管理员审批" : res.error);
+                }}
+              >
+                申请队长
+              </button>
+            ) : null}
+            {!currentUser.roles.includes("coach") ? (
+              <button
+                type="button"
+                className="underline"
+                onClick={async () => {
+                  const res = await requestRoleChange("coach");
+                  setNotice(res.success ? "已提交教练申请，待管理员审批" : res.error);
+                }}
+              >
+                申请教练
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="border border-zinc-200 bg-gray-50 py-4 text-center">
           <span className="font-mono text-2xl text-zinc-900">
@@ -339,6 +385,8 @@ export default function ProfilePage() {
             </ul>
           )}
         </div>
+
+        <SeasonReportCard mode="personal" />
 
         {insight && (
           <div className="flex flex-col gap-2 border border-zinc-200 p-4">

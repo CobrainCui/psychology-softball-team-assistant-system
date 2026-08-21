@@ -1,0 +1,13 @@
+---
+description: 每批代码改完必须 typecheck；红灯未清不得继续堆功能
+alwaysApply: true
+---
+
+# 改完即验
+
+每完成一批可独立编译的修改后，立刻运行 `npm run typecheck`（`tsc --noEmit`）。有报错先修完，再写下一批或声称完成。
+
+- 日常用 typecheck，不要每次 `npm run build`。改了 Prisma schema 或合并前再 build。
+- 大段替换后回看拼接处：函数头、`export type`、括号是否被截断。
+- typecheck 已红时，下一条功能视为未开始。
+- 细则见 `开发原则.md` §5.1。

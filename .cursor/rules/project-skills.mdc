@@ -1,0 +1,14 @@
+---
+description: Follow the three project skills for all work in this repo
+alwaysApply: true
+---
+
+# 开发标准
+
+后续开发必须遵循仓库内三份 skill，不要靠记忆或过时 `.cursorrules` 擅自加库：
+
+1. `.cursor/skills/engineering-discipline/SKILL.md` — 分层、契约、失败返回、测试、Git
+2. `.cursor/skills/nextjs-prisma/SKILL.md` — App Router、Prisma 7、Action `{ success }`、hydration、改完 typecheck
+3. `.cursor/skills/softball-ai-system/SKILL.md` — 慢投下抛、双轨、可改可删、云端 id、测试日录入优先
+
+路径、Prisma 对照、storage keys、四象限公式：`.cursor/skills/softball-ai-system/reference.md`（改路由/模型/键名/象限阈值必须先改这张表）。

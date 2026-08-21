@@ -2,55 +2,111 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { clearStoredCurrentUser, useCurrentUser } from "@/lib/currentUser";
+import { logout } from "@/lib/auth/authActions";
+import { switchActiveView } from "@/lib/auth/meActions";
+import { useSession } from "@/lib/useSession";
+import type { ActiveView, RoleKind } from "@/lib/auth/types";
 
-const PLAYER_NAV_LINKS = [
-  { href: "/", label: "测试清单" },
-  { href: "/assessment", label: "综合状态评估" },
-  { href: "/feedback", label: "训后反馈" },
-  { href: "/prehab", label: "运动损伤" },
-  { href: "/profile", label: "个人档案" },
-];
+const PUBLIC_HREFS = new Set(["/login", "/register", "/setup"]);
 
-/** 教练不录入训后反馈，只在摘要里看队员记录 */
-const COACH_NAV_LINKS = [
-  { href: "/", label: "测试清单" },
-  { href: "/assessment", label: "综合状态评估" },
-  { href: "/prehab", label: "运动损伤" },
-  { href: "/coach", label: "教练摘要" },
-  { href: "/profile", label: "个人档案" },
-];
+function hasRole(roles: RoleKind[], role: RoleKind) {
+  return roles.includes(role);
+}
 
-/** 未登录可直接进入的路由；其余需 softball_currentUser Session */
-const PUBLIC_HREFS = new Set(["/"]);
+function navForView(view: ActiveView, roles: RoleKind[]) {
+  const links: { href: string; label: string }[] = [];
+  const effective: ActiveView =
+    view === "coach" && hasRole(roles, "coach")
+      ? "coach"
+      : view === "captain" && hasRole(roles, "captain")
+        ? "captain"
+        : "player";
 
-function roleLabel(role: string | undefined): string {
-  return role === "coach" ? "教练" : "队员";
+  if (effective === "coach") {
+    links.push(
+      { href: "/", label: "测试清单" },
+      { href: "/schedule", label: "赛程" },
+      { href: "/assessment", label: "综合状态评估" },
+      { href: "/prehab", label: "运动损伤" },
+      { href: "/coach", label: "教练摘要" },
+      { href: "/profile", label: "个人档案" }
+    );
+  } else if (effective === "captain") {
+    links.push(
+      { href: "/", label: "测试清单" },
+      { href: "/schedule", label: "赛程" },
+      { href: "/assessment", label: "综合状态评估" },
+      { href: "/feedback", label: "训后反馈" },
+      { href: "/prehab", label: "运动损伤" },
+      { href: "/team", label: "队务提交" },
+      { href: "/profile", label: "个人档案" }
+    );
+  } else {
+    links.push(
+      { href: "/", label: "测试清单" },
+      { href: "/schedule", label: "赛程" },
+      { href: "/assessment", label: "综合状态评估" },
+      { href: "/feedback", label: "训后反馈" },
+      { href: "/prehab", label: "运动损伤" },
+      { href: "/profile", label: "个人档案" }
+    );
+  }
+  return links;
+}
+
+function roleLabel(roles: RoleKind[]): string {
+  if (hasRole(roles, "admin")) return "管理员";
+  if (hasRole(roles, "coach")) return "教练";
+  if (hasRole(roles, "captain")) return "队长";
+  return "队员";
+}
+
+function viewLabel(view: ActiveView): string {
+  if (view === "coach") return "教练";
+  if (view === "captain") return "队长";
+  return "队员";
 }
 
 export default function Navbar() {
-  // Session 来自登录页写入的 softball_currentUser（云端 Player 精简凭证）
-  const { currentUser, isMounted } = useCurrentUser();
+  const { user, isMounted, refresh } = useSession();
   const router = useRouter();
 
   const navLinks =
-    isMounted && currentUser?.role === "coach"
-      ? COACH_NAV_LINKS
-      : PLAYER_NAV_LINKS;
+    user && user.claimStatus === "approved"
+      ? navForView(user.activeView, user.roles)
+      : user
+        ? [{ href: "/", label: "首页" }]
+        : [];
 
   const handleNavClick = (
     e: React.MouseEvent<HTMLAnchorElement>,
     href: string
   ) => {
-    if (PUBLIC_HREFS.has(href) || currentUser) return;
+    if (PUBLIC_HREFS.has(href) || user) return;
     e.preventDefault();
     router.push("/login");
   };
 
-  const handleLogout = () => {
-    clearStoredCurrentUser();
-    window.location.href = "/";
+  const handleSwitchView = async (view: ActiveView) => {
+    if (!user || user.activeView === view) return;
+    const res = await switchActiveView(view);
+    if (!res.success) {
+      console.error("云端被拒:", res.error);
+      return;
+    }
+    await refresh();
   };
+
+  const switchableViews = (["player", "captain", "coach"] as const).filter(
+    (view) => user?.roles.includes(view)
+  );
+
+  const handleLogout = async () => {
+    await logout();
+    window.location.href = "/login";
+  };
+
+  const displayName = user?.playerName ?? user?.username ?? "未登录";
 
   return (
     <nav className="flex flex-wrap items-center gap-4 bg-black px-6 py-4 text-white print:hidden">
@@ -67,29 +123,53 @@ export default function Navbar() {
             {link.label}
           </Link>
         ))}
+        {user && hasRole(user.roles, "admin") ? (
+          <Link href="/admin" className="text-sm text-zinc-300 hover:text-white">
+            账号
+          </Link>
+        ) : null}
       </div>
 
       <div className="flex shrink-0 items-center gap-3">
+        {isMounted && user && switchableViews.length > 1 ? (
+          <label className="flex items-center gap-1 text-xs text-zinc-400">
+            工作台
+            <select
+              value={
+                switchableViews.includes(user.activeView)
+                  ? user.activeView
+                  : "player"
+              }
+              onChange={(e) => {
+                void handleSwitchView(e.target.value as ActiveView);
+              }}
+              className="border border-zinc-600 bg-black px-1 py-0.5 text-xs text-zinc-200"
+            >
+              {switchableViews.map((view) => (
+                <option key={view} value={view}>
+                  {viewLabel(view)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <span className="text-sm text-zinc-300">
-          {isMounted && currentUser
-            ? `${roleLabel(currentUser.role)} · ${currentUser.playerName}`
+          {isMounted && user
+            ? `${roleLabel(user.roles)} · ${displayName}`
             : "未登录"}
         </span>
-        {isMounted && currentUser ? (
+        {isMounted && user ? (
           <button
             onClick={handleLogout}
-            className="border border-zinc-700 px-3 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200"
+            className="rounded border border-zinc-600 px-3 py-1 text-sm text-zinc-300 hover:border-white hover:text-white"
           >
-            退出登录
+            退出
           </button>
-        ) : isMounted ? (
-          <Link
-            href="/login"
-            className="border border-zinc-500 px-3 py-1 text-xs text-zinc-200 transition-colors hover:border-zinc-300 hover:text-white"
-          >
+        ) : (
+          <Link href="/login" className="text-sm text-zinc-300 hover:text-white">
             登录
           </Link>
-        ) : null}
+        )}
       </div>
     </nav>
   );
