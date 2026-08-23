@@ -315,6 +315,7 @@ export function useTestDaySkillRecords() {
     flyCatchAttempts,
     setFlyCatchAttempts,
     flyCatchNoteDrafts,
+    setFlyCatchNoteDrafts,
     strikeJudgeColumns,
     setStrikeJudgeColumns,
     strikeJudgeCells,

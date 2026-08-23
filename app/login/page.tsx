@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { login, isSetupRequired } from "@/lib/auth/authActions";
+import { getMe } from "@/lib/auth/meActions";
+import { draftScopeFromUser, writeAuthOwner } from "@/lib/scopedStorage";
 import Link from "next/link";
 
 export default function LoginPage() {
@@ -31,6 +33,11 @@ export default function LoginPage() {
       setSubmitting(false);
       return;
     }
+    const me = await getMe();
+    if (me.success && me.user) {
+      const scope = draftScopeFromUser(me.user);
+      if (scope) writeAuthOwner(scope);
+    }
     window.location.href = "/";
   };
 
@@ -42,7 +49,7 @@ export default function LoginPage() {
         <Link href="/register" className="mx-1 underline">
           持入队码注册
         </Link>
-        。
+        。同一浏览器配置（Chrome Profile）同时只能保持一个登录会话；后登录会覆盖先登录。若需并行操作两个账号，请换 Chrome Profile、另一浏览器或无痕窗口。
       </p>
       <form onSubmit={handleSubmit} className="space-y-4">
         <label className="block text-sm">

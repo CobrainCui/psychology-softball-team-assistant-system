@@ -67,12 +67,7 @@ export default function AssessmentPage() {
             {!page.cycleTracking ? (
               <CycleConsentPanel
                 periodStartDate={page.periodStartDate}
-                onPeriodStartDate={(next) => {
-                  page.setPeriodStartDate(next);
-                  if (currentUser.playerId) {
-                    page.persistPeriodStartDate(currentUser.playerId, next);
-                  }
-                }}
+                onPeriodStartDate={page.setPeriodStartDate}
                 consentBusy={page.consentBusy}
                 onConsent={(share) => void page.handleConsent(share)}
               />

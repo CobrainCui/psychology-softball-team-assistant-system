@@ -1,8 +1,9 @@
 /**
  * 赛季模块回归：独立 test team + fixture 前缀，finally 清理。
  * npm run verify:season
+ * 必须配置独立 TEST_DATABASE_URL，见 scripts/loadTestDb.ts。
  */
-import "dotenv/config";
+import "./loadTestDb";
 import { prisma } from "../lib/db";
 import { hashPassword } from "../lib/auth/password";
 import { createSession } from "../lib/auth/session";

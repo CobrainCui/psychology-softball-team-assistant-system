@@ -31,7 +31,7 @@ npx prisma studio
 | `TestSession` + `Hit` + `SpeedRecord` + 技能表 | `lib/gameArchive.ts` |
 | `ReadinessCheck` | `lib/readinessHistory.ts`（五维 1–5 + 四象限） |
 | `InjuryCase` | `lib/injuryCases.ts` + `createInjuryCase` / 档案聚合 |
-| `SessionFeedback` | `lib/sessionFeedback.ts` + `/feedback` → 教练摘要（同日可多条） |
+| `SessionFeedback` | `lib/sessionFeedback.ts` + `/feedback` → 教练摘要（同日可多条；备注不上教练端） |
 
 `Player.role`：`player` | `coach`（P0 极简身份）
 

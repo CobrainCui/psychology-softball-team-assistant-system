@@ -64,6 +64,26 @@ export default function AdminPage() {
     if (r.success) setRoleRequests(r.requests);
   };
 
+  const applyResult = async (res: { success: true } | { success: false; error: string }) => {
+    if (res.success) {
+      setMessage("已更新");
+      await reload();
+      return;
+    }
+    console.error("云端被拒:", res.error);
+    setMessage(res.error);
+  };
+
+  const handleGrant = async (accountId: string, role: "captain" | "coach") => {
+    await applyResult(await grantRole(accountId, role));
+  };
+
+  const handleRevoke = async (accountId: string, role: "captain" | "coach") => {
+    const label = role === "coach" ? "教练" : "队长";
+    if (!window.confirm(`确认撤销该账号的${label}权限？`)) return;
+    await applyResult(await revokeRole(accountId, role));
+  };
+
   useEffect(() => {
     if (!isMounted || loading || !currentUser?.roles.includes("admin")) return;
     const timer = window.setTimeout(() => {
@@ -128,31 +148,6 @@ export default function AdminPage() {
               </div>
             ))
           )}
-          {roleRequests.length > 0 ? (
-            <div className="mt-8">
-              <h2 className="mb-2 font-semibold">角色申请</h2>
-              {roleRequests.map((r) => (
-                <div
-                  key={r.id}
-                  className="mb-2 flex justify-between border border-zinc-200 p-3 text-sm"
-                >
-                  <span>
-                    {r.username} → {r.requestedRole}
-                  </span>
-                  <button
-                    type="button"
-                    className="underline"
-                    onClick={async () => {
-                      await approveRoleChangeRequest(r.id);
-                      await reload();
-                    }}
-                  >
-                    批准
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
         </section>
       ) : null}
 
@@ -204,79 +199,111 @@ export default function AdminPage() {
       ) : null}
 
       {tab === "accounts" ? (
-        <ul className="divide-y border border-zinc-200 bg-white text-sm">
-          {accounts.map((a) => (
-            <li key={a.accountId} className="flex flex-wrap items-center gap-2 px-4 py-3">
-              <span className="font-medium">{a.username}</span>
-              <span className="text-zinc-500">{a.roles.join(", ")}</span>
-              <span className="text-zinc-400">{a.claimStatus}</span>
-              <button
-                type="button"
-                className="ml-auto text-xs underline"
-                onClick={async () => {
-                  await grantRole(a.accountId, "coach");
-                  await reload();
-                }}
+        <section className="space-y-4">
+          <p className="text-xs leading-relaxed text-zinc-500">
+            已认领成员的队长/教练权限由管理员在此直接设置，不必等队员申请。待认领账号须先在「认领」批准。档案页申请仅为可选入口。
+          </p>
+          {roleRequests.length > 0 ? (
+            <div>
+              <h2 className="mb-2 text-sm font-semibold">待批申请（可选）</h2>
+              {roleRequests.map((r) => (
+                <div
+                  key={r.id}
+                  className="mb-2 flex justify-between border border-zinc-200 p-3 text-sm"
+                >
+                  <span>
+                    {r.username} → {r.requestedRole === "coach" ? "教练" : "队长"}
+                  </span>
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={async () => {
+                      const res = await approveRoleChangeRequest(r.id);
+                      await applyResult(res.success ? { success: true } : res);
+                    }}
+                  >
+                    批准
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <ul className="divide-y border border-zinc-200 bg-white text-sm">
+            {accounts.map((a) => (
+              <li
+                key={a.accountId}
+                className="flex flex-wrap items-center gap-2 px-4 py-3"
               >
-                +coach
-              </button>
-              {a.roles.includes("coach") ? (
+                <span className="font-medium">{a.username}</span>
+                <span className="text-zinc-500">
+                  {a.roles.length > 0 ? a.roles.join(", ") : "无角色"}
+                </span>
+                <span className="text-zinc-400">
+                  {a.claimStatus ?? "无认领"}
+                  {a.playerName ? ` · ${a.playerName}` : ""}
+                </span>
+                {a.roles.includes("coach") ? (
+                  <button
+                    type="button"
+                    className="ml-auto text-xs underline"
+                    onClick={() => void handleRevoke(a.accountId, "coach")}
+                  >
+                    撤销教练
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="ml-auto text-xs underline"
+                    onClick={() => void handleGrant(a.accountId, "coach")}
+                  >
+                    设为教练
+                  </button>
+                )}
+                {a.roles.includes("captain") ? (
+                  <button
+                    type="button"
+                    className="text-xs underline"
+                    onClick={() => void handleRevoke(a.accountId, "captain")}
+                  >
+                    撤销队长
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-xs underline"
+                    onClick={() => void handleGrant(a.accountId, "captain")}
+                  >
+                    设为队长
+                  </button>
+                )}
                 <button
                   type="button"
                   className="text-xs underline"
                   onClick={async () => {
-                    await revokeRole(a.accountId, "coach");
-                    await reload();
+                    const res = await createPasswordResetLink(a.accountId);
+                    if (res.success) setMessage(`重置链接：${res.url}`);
+                    else {
+                      console.error("云端被拒:", res.error);
+                      setMessage(res.error);
+                    }
                   }}
                 >
-                  −coach
+                  重置链接
                 </button>
-              ) : null}
-              <button
-                type="button"
-                className="text-xs underline"
-                onClick={async () => {
-                  await grantRole(a.accountId, "captain");
-                  await reload();
-                }}
-              >
-                +captain
-              </button>
-              {a.roles.includes("captain") ? (
                 <button
                   type="button"
-                  className="text-xs underline"
+                  className="text-xs text-red-600 underline"
                   onClick={async () => {
-                    await revokeRole(a.accountId, "captain");
-                    await reload();
+                    if (!window.confirm(`确认停用账号 ${a.username}？`)) return;
+                    await applyResult(await disableAccount(a.accountId));
                   }}
                 >
-                  −captain
+                  停用
                 </button>
-              ) : null}
-              <button
-                type="button"
-                className="text-xs underline"
-                onClick={async () => {
-                  const res = await createPasswordResetLink(a.accountId);
-                  if (res.success) setMessage(`重置链接：${res.url}`);
-                }}
-              >
-                重置链接
-              </button>
-              <button
-                type="button"
-                className="text-xs text-red-600 underline"
-                onClick={async () => {
-                  await disableAccount(a.accountId);
-                  await reload();
-                }}
-              >
-                停用
-              </button>
-            </li>
-          ))}
-        </ul>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
     </main>
   );

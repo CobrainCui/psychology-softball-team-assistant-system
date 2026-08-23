@@ -10,20 +10,20 @@ export default function SiteFooter() {
       <div className="mx-auto flex max-w-2xl flex-col items-center gap-2">
         <MedicalDisclaimer variant="compact" />
         {/* 备案一行：公安图标+编号在左，ICP 在右；字号一致 */}
-        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] leading-none text-zinc-500">
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs leading-none text-zinc-500">
           <a
             href={GONGAN_BEIAN_HREF}
             rel="noreferrer"
             target="_blank"
             className="inline-flex items-center gap-1.5 transition-colors hover:text-zinc-800"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element -- 备案图标固定 16×17 */}
+            {/* eslint-disable-next-line @next/next/no-img-element -- 备案图标随字号略放大 */}
             <img
               src="/beian-gongan.png"
               alt=""
-              width={16}
-              height={17}
-              className="h-[17px] w-4 shrink-0"
+              width={18}
+              height={19}
+              className="h-[19px] w-[18px] shrink-0"
             />
             <span>京公网安备 11010502062112号</span>
           </a>

@@ -24,7 +24,7 @@ function blobToken(): string | undefined {
   return token || undefined;
 }
 
-function useVercelBlob(): boolean {
+function isVercelBlobConfigured(): boolean {
   if (blobToken()) return true;
   return Boolean(process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID);
 }
@@ -45,7 +45,7 @@ export async function putSeasonObject(
   if (contentType !== "application/pdf") {
     throw new Error("仅支持 PDF");
   }
-  if (useVercelBlob()) {
+  if (isVercelBlobConfigured()) {
     // 路径与库内 storageKey 对齐，禁止随机后缀；同一 pending 记录允许重传覆盖。
     await put(key, body, {
       ...PRIVATE,
@@ -64,7 +64,7 @@ export async function putSeasonObject(
 export async function headSeasonObject(
   key: string
 ): Promise<{ size: number; contentType: string } | null> {
-  if (useVercelBlob()) {
+  if (isVercelBlobConfigured()) {
     try {
       const info = await head(key, blobAuth());
       return {
@@ -89,7 +89,7 @@ export async function headSeasonObject(
 }
 
 export async function readSeasonObject(key: string): Promise<Buffer | null> {
-  if (useVercelBlob()) {
+  if (isVercelBlobConfigured()) {
     try {
       const result = await get(key, {
         ...PRIVATE,
@@ -114,7 +114,7 @@ export async function readSeasonObject(key: string): Promise<Buffer | null> {
 }
 
 export async function deleteSeasonObject(key: string): Promise<void> {
-  if (useVercelBlob()) {
+  if (isVercelBlobConfigured()) {
     await del(key, blobAuth());
     return;
   }

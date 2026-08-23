@@ -1,8 +1,9 @@
 /**
  * UI 鉴权与临床文案回归：真实 cookie 会话，不再注入 softball_currentUser。
  * 需本地 `npm run dev`。BASE_URL=http://localhost:3000 npm run verify:ui
+ * 必须配置独立 TEST_DATABASE_URL，见 scripts/loadTestDb.ts。
  */
-import "dotenv/config";
+import "./loadTestDb";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { writeFileSync } from "fs";
 import {

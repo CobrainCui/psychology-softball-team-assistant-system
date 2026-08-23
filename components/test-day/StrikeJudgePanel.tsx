@@ -83,6 +83,16 @@ export default function StrikeJudgePanel({
 
   return (
     <div className="flex flex-col gap-3">
+      {sortedColumns.length === 0 ? (
+        <button
+          type="button"
+          onClick={onInitColumns}
+          className="w-full bg-black py-3 text-sm font-bold text-white hover:bg-zinc-800"
+        >
+          按排阵初始化投手列
+        </button>
+      ) : null}
+
       <div className="grid gap-2 md:grid-cols-2">
         <CollapsedRateCard title="判断正确率" rows={judgeRates} />
         <CollapsedRateCard title="投手好球率" rows={pitcherRates} />
@@ -113,7 +123,7 @@ export default function StrikeJudgePanel({
                   <div className="font-bold text-zinc-900">
                     {column.pitcherName}
                   </div>
-                  <div className="text-[10px] text-zinc-400">长按列头拖动</div>
+                  <div className="text-xs text-zinc-400">长按列头拖动</div>
                   <button
                     type="button"
                     onPointerDown={(e) => e.stopPropagation()}
@@ -122,7 +132,7 @@ export default function StrikeJudgePanel({
                       if (!confirm("确认删除这一投手列及其判定格？")) return;
                       onRemoveColumn(column.id);
                     }}
-                    className="mt-1 border border-red-300 px-1 py-0.5 text-[10px] font-normal text-red-600 hover:bg-red-50"
+                    className="mt-1 border border-red-300 px-1 py-0.5 text-xs font-normal text-red-600 hover:bg-red-50"
                   >
                     删除
                   </button>
@@ -243,15 +253,7 @@ export default function StrikeJudgePanel({
         </div>
       ) : null}
 
-      {sortedColumns.length === 0 ? (
-        <button
-          type="button"
-          onClick={onInitColumns}
-          className="w-full border border-zinc-300 py-2 text-sm hover:bg-zinc-100"
-        >
-          按已勾投手初始化列
-        </button>
-      ) : (
+      {sortedColumns.length === 0 ? null : (
         <div className="flex flex-wrap gap-2">
           {pitcherPlayers.map((pitcher) => (
             <button

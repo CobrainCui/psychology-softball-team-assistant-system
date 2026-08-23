@@ -66,6 +66,16 @@ export function emptyCustomTestSlice(): CustomTestSlice {
   };
 }
 
+/** 结构 Json 只存测试定义，备注走 Entry 以免投影重复 */
+export function defsOnlyCustomTests(slice: CustomTestSlice): CustomTestSlice {
+  return {
+    customTestDefs: slice.customTestDefs,
+    customPlayerNotes: [],
+    customGroupNotes: [],
+    customSingleNotes: [],
+  };
+}
+
 export function isCustomRecordMode(value: unknown): value is CustomRecordMode {
   return (
     value === "per_player" || value === "per_group" || value === "single"

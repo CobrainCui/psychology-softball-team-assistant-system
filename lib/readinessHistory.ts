@@ -2,6 +2,11 @@
 
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { safeParseJSON } from "@/lib/safeParse";
+import {
+  readScopedItem,
+  writeScopedItem,
+  type DraftScope,
+} from "@/lib/scopedStorage";
 import type { Scale5 } from "@/lib/clinical/preDimensions";
 import { clampScale5 } from "@/lib/clinical/preDimensions";
 import type { PreQuadrant } from "@/lib/clinical/preQuadrant";
@@ -48,44 +53,56 @@ function isReadinessHistoryEntry(
   );
 }
 
-export function loadReadinessHistory(): ReadinessHistoryEntry[] {
-  const raw = localStorage.getItem(STORAGE_KEYS.readinessHistory);
+export function loadReadinessHistory(
+  scope: DraftScope | null
+): ReadinessHistoryEntry[] {
+  const raw = readScopedItem(STORAGE_KEYS.readinessHistory, scope);
   const parsed = safeParseJSON<unknown>(raw, []);
   if (!Array.isArray(parsed)) return [];
   return parsed.filter(isReadinessHistoryEntry);
 }
 
-export function saveReadinessHistory(entries: ReadinessHistoryEntry[]): void {
-  localStorage.setItem(STORAGE_KEYS.readinessHistory, JSON.stringify(entries));
+export function saveReadinessHistory(
+  scope: DraftScope | null,
+  entries: ReadinessHistoryEntry[]
+): void {
+  writeScopedItem(
+    STORAGE_KEYS.readinessHistory,
+    scope,
+    JSON.stringify(entries)
+  );
 }
 
 export function upsertReadinessEntry(
+  scope: DraftScope | null,
   entry: ReadinessHistoryEntry
 ): ReadinessHistoryEntry[] {
-  const existing = loadReadinessHistory();
+  const existing = loadReadinessHistory(scope);
   const withoutSameDay = existing.filter(
     (item) => !(item.playerId === entry.playerId && item.date === entry.date)
   );
   const updated = [...withoutSameDay, entry];
-  saveReadinessHistory(updated);
+  saveReadinessHistory(scope, updated);
   return updated;
 }
 
 export function removeReadinessEntry(
+  scope: DraftScope | null,
   playerId: string,
   date: string
 ): ReadinessHistoryEntry[] {
-  const updated = loadReadinessHistory().filter(
+  const updated = loadReadinessHistory(scope).filter(
     (item) => !(item.playerId === playerId && item.date === date)
   );
-  saveReadinessHistory(updated);
+  saveReadinessHistory(scope, updated);
   return updated;
 }
 
 export function loadPlayerReadinessHistory(
+  scope: DraftScope | null,
   playerId: string
 ): ReadinessHistoryEntry[] {
-  return loadReadinessHistory()
+  return loadReadinessHistory(scope)
     .filter((entry) => entry.playerId === playerId)
     .sort((a, b) => b.date.localeCompare(a.date));
 }

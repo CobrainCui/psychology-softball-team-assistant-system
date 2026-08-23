@@ -69,7 +69,7 @@ export default function SpeedTestPanel({
                   className="min-w-[5.5rem] border border-zinc-300 px-2 py-2 text-center"
                 >
                   <div className="font-bold text-zinc-900">{column.name}</div>
-                  <div className="text-[10px] text-zinc-500">秒</div>
+                  <div className="text-xs text-zinc-500">秒</div>
                   {!isDefaultSpeedColumnId(column.id) ? (
                     <button
                       type="button"
@@ -77,7 +77,7 @@ export default function SpeedTestPanel({
                         if (!confirm(`确认删除测试项「${column.name}」？`)) return;
                         onRemoveColumn(column.id);
                       }}
-                      className="mt-1 border border-red-300 px-1 py-0.5 text-[10px] font-normal text-red-600 hover:bg-red-50"
+                      className="mt-1 border border-red-300 px-1 py-0.5 text-xs font-normal text-red-600 hover:bg-red-50"
                     >
                       删除
                     </button>

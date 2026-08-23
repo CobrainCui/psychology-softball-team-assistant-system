@@ -2,11 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { formatDateOnly, parseDateOnly } from "@/lib/dateOnly";
-import {
-  computeSessionLoad,
-  isActivityType,
-  type ActivityType,
-} from "@/lib/clinical/activityTypes";
+import { normalizeActivityTypes } from "@/lib/clinical/activityTypes";
 import {
   buildPostSaveFeedback,
   type PostSaveFeedbackView,
@@ -19,55 +15,49 @@ import { requireOwnDataWriter } from "@/lib/auth/actionGuard";
 
 export type SaveSessionFeedbackPayload = {
   date: string;
-  activityType: ActivityType;
+  activityTypes: string[];
   sessionRpe: number;
-  durationMin: number;
   note: string | null;
 };
 
 export type SessionFeedbackSaved = {
   id: string;
   date: string;
-  activityType: ActivityType;
+  activityTypes: string[];
   sessionRpe: number;
-  durationMin: number;
-  sessionLoad: number;
   note: string | null;
 };
 
 function mapSessionFeedbackSaved(row: {
   id: string;
   date: Date;
-  activityType: ActivityType;
+  activityTypes: string[];
   sessionRpe: number;
-  durationMin: number;
-  sessionLoad: number;
   note: string | null;
 }): SessionFeedbackSaved {
   return {
     id: row.id,
     date: formatDateOnly(row.date),
-    activityType: row.activityType,
+    activityTypes: row.activityTypes,
     sessionRpe: row.sessionRpe,
-    durationMin: row.durationMin,
-    sessionLoad: row.sessionLoad,
     note: row.note,
   };
 }
 
 async function buildFeedbackViewForSaved(
   playerId: string,
-  dateStr: string,
   savedId: string
 ): Promise<PostSaveFeedbackView | null> {
-  const date = parseDateOnly(dateStr);
-  const [allPosts, todayPre, activeCases] = await Promise.all([
+  const [allPosts, activeCases] = await Promise.all([
     prisma.sessionFeedback.findMany({
       where: { playerId },
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-    }),
-    prisma.readinessCheck.findUnique({
-      where: { playerId_date: { playerId, date } },
+      select: {
+        id: true,
+        date: true,
+        activityTypes: true,
+        sessionRpe: true,
+      },
     }),
     prisma.injuryCase.findMany({
       where: { playerId, status: "active" },
@@ -77,19 +67,13 @@ async function buildFeedbackViewForSaved(
   const postRows: PostSessionRow[] = allPosts.map((row) => ({
     id: row.id,
     date: formatDateOnly(row.date),
-    activityType: row.activityType,
+    activityTypes: row.activityTypes,
     sessionRpe: row.sessionRpe,
-    durationMin: row.durationMin,
-    sessionLoad: row.sessionLoad,
-    savedAt: row.createdAt.toISOString(),
   }));
   const savedPost = postRows.find((p) => p.id === savedId);
   if (!savedPost) return null;
   return buildPostSaveFeedback({
     savedPost,
-    allPosts: postRows,
-    todaySessionCount: postRows.filter((p) => p.date === dateStr).length,
-    todayPhysicalBattery: todayPre?.physicalBattery ?? null,
     activeInjuries: activeCases,
   });
 }
@@ -112,17 +96,8 @@ export async function saveSessionFeedback(
     if (sessionRpe === null || sessionRpe < 1) {
       return { success: false, error: "sessionRpe 须为 1–10" };
     }
-    if (
-      typeof payload.durationMin !== "number" ||
-      !Number.isFinite(payload.durationMin) ||
-      payload.durationMin < 1 ||
-      payload.durationMin > 360
-    ) {
-      return { success: false, error: "durationMin 须为 1–360" };
-    }
-    const activityType = isActivityType(payload.activityType)
-      ? payload.activityType
-      : "other";
+    const typesRes = normalizeActivityTypes(payload.activityTypes);
+    if (!typesRes.success) return typesRes;
     const noteRaw = typeof payload.note === "string" ? payload.note.trim() : "";
     const note = noteRaw ? noteRaw.slice(0, 200) : null;
 
@@ -133,40 +108,28 @@ export async function saveSessionFeedback(
     if (!player) return { success: false, error: "云端无此队员" };
 
     const date = parseDateOnly(payload.date);
-    const durationMin = Math.round(payload.durationMin);
-    const sessionLoad = computeSessionLoad(sessionRpe, durationMin);
-
     const created = await prisma.sessionFeedback.create({
       data: {
         player: { connect: { id: player.id } },
         date,
         schemaVersion: SESSION_FEEDBACK_SCHEMA_VERSION,
-        activityType,
+        activityTypes: typesRes.types,
         sessionRpe,
-        durationMin,
-        sessionLoad,
+        durationMin: null,
+        sessionLoad: sessionRpe,
         note,
       },
     });
 
     const view = await buildFeedbackViewForSaved(
       player.id,
-      payload.date,
       created.id
     );
     if (!view) return { success: false, error: "写入后读取失败" };
 
     return {
       success: true,
-      entry: {
-        id: created.id,
-        date: payload.date,
-        activityType,
-        sessionRpe,
-        durationMin,
-        sessionLoad,
-        note,
-      },
+      entry: mapSessionFeedbackSaved(created),
       view,
     };
   } catch (error) {
@@ -188,6 +151,13 @@ export async function getSessionFeedbacks(
     const rows = await prisma.sessionFeedback.findMany({
       where: { playerId, date: parseDateOnly(date) },
       orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        date: true,
+        activityTypes: true,
+        sessionRpe: true,
+        note: true,
+      },
     });
     return { success: true, entries: rows.map(mapSessionFeedbackSaved) };
   } catch (error) {
@@ -217,37 +187,40 @@ export async function updateSessionFeedback(
     if (sessionRpe === null || sessionRpe < 1) {
       return { success: false, error: "sessionRpe 须为 1–10" };
     }
-    if (
-      typeof payload.durationMin !== "number" ||
-      !Number.isFinite(payload.durationMin) ||
-      payload.durationMin < 1 ||
-      payload.durationMin > 360
-    ) {
-      return { success: false, error: "durationMin 须为 1–360" };
-    }
+    const typesRes = normalizeActivityTypes(payload.activityTypes);
+    if (!typesRes.success) return typesRes;
     const existing = await prisma.sessionFeedback.findFirst({
       where: { id: payload.id, playerId },
+      select: { id: true, date: true },
     });
     if (!existing) return { success: false, error: "找不到该训后反馈" };
     const existingDate = formatDateOnly(existing.date);
     const existingDayErr = rejectIfNotToday(existingDate);
     if (existingDayErr) return existingDayErr;
 
-    const activityType = isActivityType(payload.activityType)
-      ? payload.activityType
-      : "other";
     const noteRaw = typeof payload.note === "string" ? payload.note.trim() : "";
     const note = noteRaw ? noteRaw.slice(0, 200) : null;
-    const durationMin = Math.round(payload.durationMin);
-    const sessionLoad = computeSessionLoad(sessionRpe, durationMin);
 
     const updated = await prisma.sessionFeedback.update({
       where: { id: existing.id },
-      data: { activityType, sessionRpe, durationMin, sessionLoad, note },
+      data: {
+        activityTypes: typesRes.types,
+        sessionRpe,
+        durationMin: null,
+        sessionLoad: sessionRpe,
+        note,
+        schemaVersion: SESSION_FEEDBACK_SCHEMA_VERSION,
+      },
+      select: {
+        id: true,
+        date: true,
+        activityTypes: true,
+        sessionRpe: true,
+        note: true,
+      },
     });
     const view = await buildFeedbackViewForSaved(
       playerId,
-      existingDate,
       updated.id
     );
     if (!view) return { success: false, error: "写入后读取失败" };
@@ -271,6 +244,7 @@ export async function deleteSessionFeedback(payload: {
     const playerId = gate.playerId;
     const existing = await prisma.sessionFeedback.findFirst({
       where: { id: payload.id, playerId },
+      select: { id: true, date: true },
     });
     if (!existing) return { success: false, error: "找不到该训后反馈" };
     const dayErr = rejectIfNotToday(formatDateOnly(existing.date));

@@ -1,84 +1,128 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type Player } from "@/lib/players";
 import { createRosterPlayer } from "@/lib/actions";
 import { playersAssignedTo } from "@/lib/testDay/rosterHelpers";
 import {
   accordionTestItems,
   clearSessionDraft,
+  createEmptySessionDraft,
   loadSessionDraft,
   saveSessionDraft,
   SESSION_DRAFT_SCHEMA_VERSION,
+  type SessionDraft,
 } from "@/lib/sessionDraft";
 import { ADD_CUSTOM_TEST_PANEL_ID } from "@/components/test-day/hitLabels";
 import { useTestDayHits } from "@/hooks/useTestDayHits";
 import { useTestDayAssignments } from "@/hooks/useTestDayAssignments";
 import { useTestDaySkillRecords } from "@/hooks/useTestDaySkillRecords";
 import type { PendingHit, SidebarMode } from "@/hooks/testDaySessionTypes";
+import { useSession } from "@/lib/useSession";
+import {
+  draftScopeFromUser,
+  ownerToken,
+  type DraftScope,
+} from "@/lib/scopedStorage";
+import {
+  createSessionDraftTabId,
+  notifySessionDraftCleared,
+  notifySessionDraftWriting,
+  subscribeSessionDraftSync,
+} from "@/lib/testDay/draftSync";
 
 export type { PendingHit, SidebarMode };
 
+function scopeToken(scope: DraftScope | null): string | null {
+  return scope ? ownerToken(scope) : null;
+}
+
 export function useTestDaySession() {
+  const { user } = useSession();
+  const scope = draftScopeFromUser(user);
+  const tabIdRef = useRef(createSessionDraftTabId());
   const [players, setPlayers] = useState<Player[]>([]);
   const [currentBatterId, setCurrentBatterId] = useState("");
   const [isMounted, setIsMounted] = useState(false);
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>("T座打击");
+  const [peerWriting, setPeerWriting] = useState(false);
 
   const hits = useTestDayHits(currentBatterId);
   const assignments = useTestDayAssignments();
   const skills = useTestDaySkillRecords();
 
-  // 名册由 app/page.tsx 通过 getPlayers() 注入；此处只恢复当场草稿
+  const applyDraft = (draft: SessionDraft) => {
+    hits.setHits(draft.hits);
+    skills.setSpeedColumns(draft.speedColumns);
+    skills.setSpeedMarks(draft.speedMarks);
+    assignments.setAssignments(draft.assignments);
+    assignments.setTestItems(draft.testItems);
+    assignments.setAssignmentLocked(draft.assignmentLocked);
+    assignments.setCommittedAssignments(draft.committedAssignments);
+    assignments.setAssignmentLog(draft.assignmentLog);
+    skills.setFlyCatchAttempts(draft.flyCatchAttempts);
+    skills.setFlyCatchNoteDrafts(draft.flyCatchNoteDrafts);
+    skills.setStrikeJudgeColumns(draft.strikeJudgeColumns);
+    skills.setStrikeJudgeCells(draft.strikeJudgeCells);
+    skills.setThrowPlays(draft.throwPlays);
+    assignments.setCustomSlice({
+      customTestDefs: draft.customTestDefs,
+      customPlayerNotes: draft.customPlayerNotes,
+      customGroupNotes: draft.customGroupNotes,
+      customSingleNotes: draft.customSingleNotes,
+    });
+    setCurrentBatterId(draft.currentBatterId);
+  };
+
+  const buildDraft = (): SessionDraft => ({
+    schemaVersion: SESSION_DRAFT_SCHEMA_VERSION,
+    hits: hits.hits,
+    speedRecords: [],
+    speedColumns: skills.speedColumns,
+    speedMarks: skills.speedMarks,
+    assignments: assignments.assignments,
+    testItems: assignments.testItems,
+    assignmentLocked: assignments.assignmentLocked,
+    committedAssignments: assignments.committedAssignments,
+    assignmentLog: assignments.assignmentLog,
+    currentBatterId,
+    flyCatchNoteDrafts: skills.flyCatchNoteDrafts,
+    flyCatchAttempts: skills.flyCatchAttempts,
+    strikeJudgeColumns: skills.strikeJudgeColumns,
+    strikeJudgeCells: skills.strikeJudgeCells,
+    throwPlays: skills.throwPlays,
+    customTestDefs: assignments.customSlice.customTestDefs,
+    customPlayerNotes: assignments.customSlice.customPlayerNotes,
+    customGroupNotes: assignments.customSlice.customGroupNotes,
+    customSingleNotes: assignments.customSlice.customSingleNotes,
+  });
+
+  // 推导步骤：accountId 变化则清空内存并加载该账号分区草稿；未登录不写盘
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const draft = loadSessionDraft();
-      hits.setHits(draft.hits);
-      skills.setSpeedColumns(draft.speedColumns);
-      skills.setSpeedMarks(draft.speedMarks);
-      assignments.setAssignments(draft.assignments);
-      assignments.setTestItems(draft.testItems);
-      assignments.setAssignmentLocked(draft.assignmentLocked);
-      assignments.setCommittedAssignments(draft.committedAssignments);
-      assignments.setAssignmentLog(draft.assignmentLog);
-      skills.setFlyCatchAttempts(draft.flyCatchAttempts);
-      skills.setStrikeJudgeColumns(draft.strikeJudgeColumns);
-      skills.setStrikeJudgeCells(draft.strikeJudgeCells);
-      skills.setThrowPlays(draft.throwPlays);
-      assignments.setCustomSlice({
-        customTestDefs: draft.customTestDefs,
-        customPlayerNotes: draft.customPlayerNotes,
-        customGroupNotes: draft.customGroupNotes,
-        customSingleNotes: draft.customSingleNotes,
-      });
+      const token = scopeToken(scope);
+      if (!scope) {
+        applyDraft(createEmptySessionDraft());
+        setLoadedFor(null);
+        setIsMounted(true);
+        return;
+      }
+      applyDraft(loadSessionDraft(scope));
+      setLoadedFor(token);
       setIsMounted(true);
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [scope?.teamId, scope?.accountId]);
 
   useEffect(() => {
-    if (!isMounted) return;
-    saveSessionDraft({
-      schemaVersion: SESSION_DRAFT_SCHEMA_VERSION,
-      hits: hits.hits,
-      speedRecords: [],
-      speedColumns: skills.speedColumns,
-      speedMarks: skills.speedMarks,
-      assignments: assignments.assignments,
-      testItems: assignments.testItems,
-      assignmentLocked: assignments.assignmentLocked,
-      committedAssignments: assignments.committedAssignments,
-      assignmentLog: assignments.assignmentLog,
-      flyCatchAttempts: skills.flyCatchAttempts,
-      strikeJudgeColumns: skills.strikeJudgeColumns,
-      strikeJudgeCells: skills.strikeJudgeCells,
-      throwPlays: skills.throwPlays,
-      customTestDefs: assignments.customSlice.customTestDefs,
-      customPlayerNotes: assignments.customSlice.customPlayerNotes,
-      customGroupNotes: assignments.customSlice.customGroupNotes,
-      customSingleNotes: assignments.customSlice.customSingleNotes,
-    });
+    if (!isMounted || !scope) return;
+    if (loadedFor !== scopeToken(scope)) return;
+    if (saveSessionDraft(scope, buildDraft())) {
+      notifySessionDraftWriting(scope, tabIdRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildDraft / scope 已由盘面字段与 accountId 覆盖
   }, [
     hits.hits,
     skills.speedColumns,
@@ -90,11 +134,50 @@ export function useTestDaySession() {
     assignments.assignmentLog,
     assignments.customSlice,
     skills.flyCatchAttempts,
+    skills.flyCatchNoteDrafts,
     skills.strikeJudgeColumns,
     skills.strikeJudgeCells,
     skills.throwPlays,
+    currentBatterId,
     isMounted,
+    loadedFor,
+    user?.accountId,
+    user?.teamId,
   ]);
+
+  useEffect(() => {
+    if (!players.length) return;
+    if (currentBatterId && players.some((player) => player.id === currentBatterId)) {
+      return;
+    }
+    const nextId = players[0]!.id;
+    const timer = window.setTimeout(() => {
+      setCurrentBatterId(nextId);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [players, currentBatterId]);
+
+  useEffect(() => {
+    if (!scope) return;
+    let hintTimer = 0;
+    const unsubscribe = subscribeSessionDraftSync(scope, tabIdRef.current, {
+      onCleared: () => {
+        clearSessionDraft(scope);
+        applyDraft(createEmptySessionDraft());
+        setActiveTab("T座打击");
+      },
+      onPeerWriting: () => {
+        setPeerWriting(true);
+        window.clearTimeout(hintTimer);
+        hintTimer = window.setTimeout(() => setPeerWriting(false), 3000);
+      },
+    });
+    return () => {
+      window.clearTimeout(hintTimer);
+      unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope?.teamId, scope?.accountId]);
 
   const currentBatter = players.find((player) => player.id === currentBatterId);
 
@@ -140,12 +223,19 @@ export function useTestDaySession() {
     setCurrentBatterId(res.player.id);
   };
 
+  const persistDraft = () => {
+    if (!scope || loadedFor !== scopeToken(scope)) return;
+    saveSessionDraft(scope, buildDraft());
+  };
+
   const clearBoardAfterArchive = () => {
     hits.resetHits();
     skills.resetSkillRecords();
     assignments.resetAssignments();
+    setCurrentBatterId("");
     setActiveTab("T座打击");
-    clearSessionDraft();
+    clearSessionDraft(scope);
+    if (scope) notifySessionDraftCleared(scope);
   };
 
   const pitcherPlayers = playersAssignedTo(
@@ -183,6 +273,9 @@ export function useTestDaySession() {
     currentBatterId,
     setCurrentBatterId,
     clearBoardAfterArchive,
+    persistDraft,
+    peerWriting,
+    accountId: user?.accountId ?? null,
     currentResult: hits.currentResult,
     currentPitchType: hits.currentPitchType,
     setCurrentPitchType: hits.setCurrentPitchType,

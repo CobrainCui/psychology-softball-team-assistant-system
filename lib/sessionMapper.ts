@@ -23,6 +23,12 @@ import {
 } from "@/lib/gameArchive";
 import { resolveSpeedGrid } from "@/lib/testDay/speedGrid";
 import { parseCustomTestSlice } from "@/lib/testDay/customTests";
+import {
+  DEFAULT_TEST_ITEMS,
+  ensureRoleAssignmentItems,
+  parseAssignmentLog,
+  parseAssignments,
+} from "@/lib/sessionDraft";
 
 type SessionWithRelations = {
   schemaVersion: number;
@@ -96,6 +102,9 @@ type SessionWithRelations = {
     firstBase: { id: string; name: string };
   }[];
   customTests?: unknown;
+  assignments?: unknown;
+  testItems?: unknown;
+  assignmentLog?: unknown;
 };
 
 const HIT_RESULTS: ReadonlySet<string> = new Set(HIT_RESULT_VALUES);
@@ -241,6 +250,13 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
     }));
 
   const custom = parseCustomTestSlice(session.customTests);
+  const testItems = ensureRoleAssignmentItems(
+    Array.isArray(session.testItems) &&
+      session.testItems.every((item) => typeof item === "string") &&
+      session.testItems.length > 0
+      ? (session.testItems as string[])
+      : [...DEFAULT_TEST_ITEMS]
+  );
 
   return {
     schemaVersion: session.schemaVersion || GAME_ARCHIVE_SCHEMA_VERSION,
@@ -255,5 +271,8 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
     strikeJudgeCells,
     throwPlays,
     ...custom,
+    assignments: parseAssignments(session.assignments),
+    testItems,
+    assignmentLog: parseAssignmentLog(session.assignmentLog),
   };
 }

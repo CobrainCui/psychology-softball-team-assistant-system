@@ -79,6 +79,8 @@ description: >-
 ## 身份与权威源
 
 - Session：httpOnly cookie `softball_sid`（`AuthSession`）。读：`getMe()` / `useSession` / `useRequireAuth`。服务端鉴权按 `AccountRole` **并集**，`activeView` 只切导航不授权限。
+- **admin 默认不是队员**：`/setup` 只建 `admin` 角色、不绑 `Player`。纯 admin 仅 `/admin` 账号管理（入队码、认领、角色、停用、重置链接），首页重定向到该页。已认领后再被授予 admin 的账号仍走角色并集，可同时用业务页。
+- **角色授予**：管理员可在 `/admin` 账户列表直接授予/撤销已认领成员的队长、教练；队员在档案页申请是可选的，不是必经步骤。captain/coach 仍须已认领且绑定 `Player`。
 - 名册权威：云端 `Player`。云端未就绪显示 Loading，禁止先渲染假名册。
 - 正式成绩权威：`TestSession`。`session_draft` 仅当场草稿 / 交卷失败降级。
 - 登录是账密（`Account`），不是「选人=登录」。单队试点；写入一律用 session `teamId`，禁止再引入客户端 `playerId` 作为权威。

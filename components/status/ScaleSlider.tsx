@@ -30,7 +30,7 @@ export function ScaleSlider({
         onChange={(e) => onChange(Number(e.target.value))}
         className="accent-zinc-900"
       />
-      <div className="flex justify-between text-[10px] text-zinc-400">
+      <div className="flex justify-between text-xs text-zinc-400">
         <span>1 {hint1}</span>
         <span>3 {hint3}</span>
         <span>5 {hint5}</span>

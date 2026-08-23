@@ -3,12 +3,13 @@
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { safeParseJSON } from "@/lib/safeParse";
 import {
-  computeSessionLoad,
-  isActivityType,
-  type ActivityType,
-} from "@/lib/clinical/activityTypes";
+  readScopedItem,
+  writeScopedItem,
+  type DraftScope,
+} from "@/lib/scopedStorage";
+import { parseActivityTypes } from "@/lib/clinical/activityTypes";
 
-export const SESSION_FEEDBACK_SCHEMA_VERSION = 2;
+export const SESSION_FEEDBACK_SCHEMA_VERSION = 3;
 
 export interface SessionFeedbackEntry {
   schemaVersion: number;
@@ -16,50 +17,62 @@ export interface SessionFeedbackEntry {
   playerId: string;
   playerName: string;
   date: string;
-  activityType: ActivityType;
+  activityTypes: string[];
   sessionRpe: number;
-  durationMin: number;
-  sessionLoad: number;
   note: string | null;
   timestamp: number;
 }
 
-function isSessionFeedbackEntry(
+function migrateSessionFeedbackEntry(
   value: unknown
-): value is SessionFeedbackEntry {
-  if (!value || typeof value !== "object") return false;
+): SessionFeedbackEntry | null {
+  if (!value || typeof value !== "object") return null;
   const entry = value as Record<string, unknown>;
-  return (
-    typeof entry.id === "string" &&
-    typeof entry.playerId === "string" &&
-    typeof entry.date === "string" &&
-    typeof entry.sessionRpe === "number" &&
-    typeof entry.durationMin === "number"
-  );
+  if (
+    typeof entry.id !== "string" ||
+    typeof entry.playerId !== "string" ||
+    typeof entry.date !== "string" ||
+    typeof entry.sessionRpe !== "number"
+  ) {
+    return null;
+  }
+  const activityTypes = Array.isArray(entry.activityTypes)
+    ? parseActivityTypes(entry.activityTypes)
+    : parseActivityTypes(
+        typeof entry.activityType === "string" ? [entry.activityType] : []
+      );
+  return {
+    schemaVersion: SESSION_FEEDBACK_SCHEMA_VERSION,
+    id: entry.id,
+    playerId: entry.playerId,
+    playerName: typeof entry.playerName === "string" ? entry.playerName : "",
+    date: entry.date,
+    activityTypes,
+    sessionRpe: entry.sessionRpe,
+    note: typeof entry.note === "string" ? entry.note : null,
+    timestamp: typeof entry.timestamp === "number" ? entry.timestamp : Date.now(),
+  };
 }
 
-export function loadSessionFeedbackDrafts(): SessionFeedbackEntry[] {
-  const raw = localStorage.getItem(STORAGE_KEYS.sessionFeedback);
+export function loadSessionFeedbackDrafts(
+  scope: DraftScope | null
+): SessionFeedbackEntry[] {
+  const raw = readScopedItem(STORAGE_KEYS.sessionFeedback, scope);
   const parsed = safeParseJSON<unknown>(raw, []);
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter(isSessionFeedbackEntry).map((entry) => ({
-    ...entry,
-    activityType: isActivityType(entry.activityType)
-      ? entry.activityType
-      : "other",
-    sessionLoad:
-      typeof entry.sessionLoad === "number"
-        ? entry.sessionLoad
-        : computeSessionLoad(entry.sessionRpe, entry.durationMin),
-    note: typeof entry.note === "string" ? entry.note : null,
-  }));
+  return parsed
+    .map(migrateSessionFeedbackEntry)
+    .filter((entry): entry is SessionFeedbackEntry => entry !== null);
 }
 
 export function appendSessionFeedbackDraft(
-  entry: Omit<SessionFeedbackEntry, "schemaVersion" | "id" | "timestamp" | "sessionLoad"> & {
+  scope: DraftScope | null,
+  entry: Omit<
+    SessionFeedbackEntry,
+    "schemaVersion" | "id" | "timestamp"
+  > & {
     id?: string;
     timestamp?: number;
-    sessionLoad?: number;
   }
 ): SessionFeedbackEntry {
   const full: SessionFeedbackEntry = {
@@ -68,67 +81,72 @@ export function appendSessionFeedbackDraft(
     playerId: entry.playerId,
     playerName: entry.playerName,
     date: entry.date,
-    activityType: entry.activityType,
+    activityTypes: parseActivityTypes(entry.activityTypes),
     sessionRpe: entry.sessionRpe,
-    durationMin: entry.durationMin,
-    sessionLoad:
-      entry.sessionLoad ??
-      computeSessionLoad(entry.sessionRpe, entry.durationMin),
     note: entry.note,
     timestamp: entry.timestamp ?? Date.now(),
   };
-  const existing = loadSessionFeedbackDrafts();
-  localStorage.setItem(
+  const existing = loadSessionFeedbackDrafts(scope);
+  writeScopedItem(
     STORAGE_KEYS.sessionFeedback,
+    scope,
     JSON.stringify([...existing, full])
   );
   return full;
 }
 
-function writeSessionFeedbackDrafts(entries: SessionFeedbackEntry[]): void {
-  localStorage.setItem(STORAGE_KEYS.sessionFeedback, JSON.stringify(entries));
+function writeSessionFeedbackDrafts(
+  scope: DraftScope | null,
+  entries: SessionFeedbackEntry[]
+): void {
+  writeScopedItem(
+    STORAGE_KEYS.sessionFeedback,
+    scope,
+    JSON.stringify(entries)
+  );
 }
 
 export function updateSessionFeedbackDraft(
+  scope: DraftScope | null,
   id: string,
   patch: Partial<
-    Pick<
-      SessionFeedbackEntry,
-      "activityType" | "sessionRpe" | "durationMin" | "note"
-    >
+    Pick<SessionFeedbackEntry, "activityTypes" | "sessionRpe" | "note">
   >
 ): SessionFeedbackEntry | null {
-  const existing = loadSessionFeedbackDrafts();
+  const existing = loadSessionFeedbackDrafts(scope);
   const index = existing.findIndex((entry) => entry.id === id);
   if (index === -1) return null;
   const current = existing[index]!;
-  const sessionRpe = patch.sessionRpe ?? current.sessionRpe;
-  const durationMin = patch.durationMin ?? current.durationMin;
   const next: SessionFeedbackEntry = {
     ...current,
     ...patch,
-    sessionRpe,
-    durationMin,
-    sessionLoad: computeSessionLoad(sessionRpe, durationMin),
+    activityTypes: parseActivityTypes(
+      patch.activityTypes ?? current.activityTypes
+    ),
     timestamp: Date.now(),
   };
   const updated = [...existing];
   updated[index] = next;
-  writeSessionFeedbackDrafts(updated);
+  writeSessionFeedbackDrafts(scope, updated);
   return next;
 }
 
-export function deleteSessionFeedbackDraft(id: string): void {
+export function deleteSessionFeedbackDraft(
+  scope: DraftScope | null,
+  id: string
+): void {
   writeSessionFeedbackDrafts(
-    loadSessionFeedbackDrafts().filter((entry) => entry.id !== id)
+    scope,
+    loadSessionFeedbackDrafts(scope).filter((entry) => entry.id !== id)
   );
 }
 
 export function loadPlayerSessionFeedbackDrafts(
+  scope: DraftScope | null,
   playerId: string,
   date: string
 ): SessionFeedbackEntry[] {
-  return loadSessionFeedbackDrafts().filter(
+  return loadSessionFeedbackDrafts(scope).filter(
     (entry) => entry.playerId === playerId && entry.date === date
   );
 }

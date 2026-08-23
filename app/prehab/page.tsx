@@ -71,7 +71,8 @@ export default function InjuryPage() {
       void reload();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [isMounted, currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 按 accountId 重载，避免对象引用抖动
+  }, [isMounted, currentUser?.accountId]);
 
   const toggleRelation = (id: PainExerciseRelationId) => {
     setRelations((prev) => {

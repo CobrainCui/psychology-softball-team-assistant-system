@@ -93,6 +93,40 @@ enum ThrowBlame {
   both
 }
 
+enum TestDayDraftStatus {
+  open
+  frozen
+  archived
+}
+
+enum TestDayEntryKind {
+  hit
+  fly_catch
+  speed_mark
+  strike_cell
+  throw_play
+  custom_player_note
+  custom_group_note
+  custom_single_note
+}
+
+enum TestDayEntryStatus {
+  active
+  tombstoned
+}
+
+enum TestDayConflictType {
+  value_mismatch
+  structure
+  delete_request
+}
+
+enum TestDayConflictReviewStatus {
+  open
+  resolved
+  dismissed
+}
+
 enum PainArea {
   shoulder
   elbow
@@ -109,15 +143,6 @@ enum PreQuadrant {
   real_fatigue
   injury_risk
   peak
-}
-
-enum ActivityType {
-  batting
-  throwing_defense
-  baserunning
-  conditioning
-  game
-  other
 }
 
 enum InjuryKind {
@@ -246,6 +271,7 @@ model Team {
 
   players         Player[]
   sessions        TestSession[]
+  testDayDrafts   TestDayDraft[]
   accounts        Account[]
   enrollmentCodes EnrollmentCode[]
   seasons         Season[]
@@ -303,9 +329,12 @@ model TestSession {
   assignmentLog Json?
   /// 自定义测试定义与文字备注快照
   customTests   Json?
+  /// 协作草稿归档来源；一草稿至多一份正式 TestSession
+  sourceDraftId String?  @unique
   createdAt     DateTime @default(now())
 
   team               Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  sourceDraft        TestDayDraft?       @relation(fields: [sourceDraftId], references: [id], onDelete: SetNull)
   hits               Hit[]
   speedRecords       SpeedRecord[]
   speedColumns       SpeedColumn[]
@@ -316,6 +345,90 @@ model TestSession {
   throwPlays         ThrowPlay[]
 
   @@index([teamId, archivedAt])
+}
+
+// ——— 协作测试日进行中草稿（正式成绩仍是归档后的 TestSession） ———
+
+model TestDayDraft {
+  id                 String             @id @default(cuid())
+  teamId             String
+  date               DateTime           @db.Date
+  status             TestDayDraftStatus @default(open)
+  schemaVersion      Int                @default(1)
+  createdByAccountId String
+  testItems          Json
+  assignments        Json
+  customTests        Json?
+  /// 测速列 + 好球判断列
+  skillStructure     Json?
+  assignmentLog      Json?
+  version            Int                @default(1)
+  frozenAt           DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  team      Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdBy Account              @relation("TestDayDraftCreator", fields: [createdByAccountId], references: [id], onDelete: Restrict)
+  members   TestDayDraftMember[]
+  entries   TestDayEntry[]
+  conflicts TestDayConflict[]
+  session   TestSession?
+
+  @@index([teamId, status])
+  @@index([teamId, date])
+}
+
+model TestDayDraftMember {
+  id        String   @id @default(cuid())
+  draftId   String
+  accountId String
+  joinedAt  DateTime @default(now())
+
+  draft   TestDayDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  account Account      @relation("TestDayDraftMembership", fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, accountId])
+  @@index([accountId])
+}
+
+model TestDayEntry {
+  id              String             @id @default(cuid())
+  draftId         String
+  kind            TestDayEntryKind
+  entityKey       String
+  payload         Json
+  clientEntryId   String
+  authorAccountId String
+  status          TestDayEntryStatus @default(active)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  draft  TestDayDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  author Account      @relation("TestDayEntryAuthor", fields: [authorAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([draftId, clientEntryId])
+  @@index([draftId, entityKey])
+  @@index([draftId, status])
+}
+
+model TestDayConflict {
+  id                  String                      @id @default(cuid())
+  draftId             String
+  entityKey           String
+  type                TestDayConflictType
+  candidateEntryIds   Json
+  reviewStatus        TestDayConflictReviewStatus @default(open)
+  resolvedByAccountId String?
+  finalPayload        Json?
+  resolvedAt          DateTime?
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  draft      TestDayDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  resolvedBy Account?     @relation("TestDayConflictResolver", fields: [resolvedByAccountId], references: [id], onDelete: SetNull)
+
+  @@index([draftId, reviewStatus])
+  @@index([draftId, entityKey])
 }
 
 model Hit {
@@ -578,21 +691,23 @@ model InjuryNoteRecord {
   @@index([caseId, kind])
 }
 
-// ——— 训后主观负荷（Session RPE × 时长；同日可多条） ———
+// ——— 训后反馈（活动类型多选 + 疲劳 1–10；同日可多条） ———
 
 model SessionFeedback {
-  id            String       @id @default(cuid())
+  id            String   @id @default(cuid())
   playerId      String
-  schemaVersion Int          @default(2)
-  date          DateTime     @db.Date
-  activityType  ActivityType @default(other)
+  schemaVersion Int      @default(3)
+  date          DateTime @db.Date
+  /// 预设 code 或自定义原文；旧 other 回填为空数组
+  activityTypes String[]
   sessionRpe    Int
-  durationMin   Int
-  /// RPE × 分钟
+  /// 历史时长；新写入为 null
+  durationMin   Int?
+  /// 新写入等于 sessionRpe；界面不再展示负荷
   sessionLoad   Int
   note          String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
@@ -634,6 +749,10 @@ model Account {
   gameFilesUploaded       GameRecordFile[]        @relation("GameFileUploader")
   gameFilesDeleted        GameRecordFile[]        @relation("GameFileDeleter")
   gameSummariesConfirmed  ConfirmedGameSummary[]  @relation("GameSummaryConfirmer")
+  testDayDraftsCreated    TestDayDraft[]          @relation("TestDayDraftCreator")
+  testDayDraftMemberships TestDayDraftMember[]    @relation("TestDayDraftMembership")
+  testDayEntriesAuthored  TestDayEntry[]          @relation("TestDayEntryAuthor")
+  testDayConflictsResolved TestDayConflict[]      @relation("TestDayConflictResolver")
 
   @@index([teamId])
 }

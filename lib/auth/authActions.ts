@@ -113,41 +113,19 @@ export async function bootstrapAdmin(payload: {
       const existing = await tx.account.findUnique({ where: { username } });
       if (existing) throw new Error("用户名已被占用");
 
-      // 推导步骤：先建名册 Player → 绑定 Account.playerId → approved Claim
-      // 否则 PendingClaimGate 会因无 playerId 锁死 /admin
-      const player = await tx.player.create({
-        data: {
-          teamId: team.id,
-          name: username,
-          role: "player",
-        },
-      });
-
+      // 推导步骤：首个 admin 只建 Account + admin 角色，不绑 Player、不发认领。
+      // 账号管理不依赖 isApproved；业务页仍须已认领队员。
       const account = await tx.account.create({
         data: {
           teamId: team.id,
           username,
           passwordHash,
           activeView: "player",
-          playerId: player.id,
         },
       });
 
       await tx.accountRole.create({
         data: { accountId: account.id, role: "admin" },
-      });
-      await tx.accountRole.create({
-        data: { accountId: account.id, role: "player" },
-      });
-
-      await tx.membershipClaim.create({
-        data: {
-          accountId: account.id,
-          status: "approved",
-          displayName: username,
-          playerId: player.id,
-          reviewedAt: new Date(),
-        },
       });
     });
 

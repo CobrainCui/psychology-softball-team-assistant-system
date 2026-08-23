@@ -57,9 +57,12 @@ export default function SchedulePage() {
   }, []);
 
   useEffect(() => {
-    if (!isMounted || !currentUser) return;
-    void reload();
-  }, [isMounted, currentUser, reload]);
+    if (!isMounted || !currentUser?.accountId) return;
+    const timer = window.setTimeout(() => {
+      void reload();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isMounted, currentUser?.accountId, reload]);
 
   if (!isMounted || !currentUser) return <PageLoading />;
 

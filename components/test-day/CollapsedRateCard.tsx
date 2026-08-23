@@ -22,7 +22,7 @@ export default function CollapsedRateCard({
       >
         <span>{title}</span>
         <span
-          className={`inline-block text-[10px] leading-none text-zinc-500 transition-transform ${
+          className={`inline-block text-xs leading-none text-zinc-500 transition-transform ${
             expanded ? "" : "-rotate-90"
           }`}
         >

@@ -166,7 +166,7 @@ export default function CoachSummaryPage() {
             )}
             <div className="border border-zinc-900 p-4">
               <h2 className="text-xs font-semibold uppercase text-zinc-700">
-                今日训后反馈（队员 · 私密）
+                今日训后反馈
               </h2>
               {summary.sessionFeedbacks.length === 0 ? (
                 <p className="mt-2 text-sm text-zinc-400">当日尚无队员训后反馈</p>
@@ -180,8 +180,7 @@ export default function CoachSummaryPage() {
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="font-medium">{row.playerName}</span>
                         <span className="font-mono text-xs text-zinc-500">
-                          {row.activityLabel} · RPE {row.sessionRpe} ·{" "}
-                          {row.durationMin}min · 负荷 {row.sessionLoad}
+                          {row.activityLabel} · 疲劳 {row.sessionRpe}
                         </span>
                       </div>
                     </li>

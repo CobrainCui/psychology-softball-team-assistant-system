@@ -38,12 +38,14 @@ export async function grantRole(
       where: { accountId: targetAccountId },
       select: { status: true },
     });
-    // 推导步骤：高权必须 approved + playerId，禁止 pending 被授 captain/coach/admin
-    if (
-      ELEVATED_ROLES.includes(role) &&
-      (claim?.status !== "approved" || !target.playerId)
-    ) {
-      return { success: false, error: "仅已认领账号可授予队长、教练或管理员" };
+    // 推导步骤：captain/coach 必须已认领；直授不依赖队员申请；admin 可无 Player，但禁止授给待认领账号
+    if (role === "captain" || role === "coach") {
+      if (claim?.status !== "approved" || !target.playerId) {
+        return { success: false, error: "仅已认领账号可授予队长或教练" };
+      }
+    }
+    if (role === "admin" && claim?.status === "pending") {
+      return { success: false, error: "待认领账号不可授予管理员" };
     }
 
     if (role === "admin") {
@@ -64,6 +66,22 @@ export async function grantRole(
       },
       update: {},
     });
+
+    // 管理员直授即可；若队员曾申请同一角色，待批记录一并结案
+    if (role === "captain" || role === "coach") {
+      await prisma.roleChangeRequest.updateMany({
+        where: {
+          accountId: targetAccountId,
+          requestedRole: role,
+          status: "pending",
+        },
+        data: {
+          status: "approved",
+          reviewedByAccountId: session.ctx.accountId,
+          reviewedAt: new Date(),
+        },
+      });
+    }
 
     await writeAuditLog({
       action: "role_granted",

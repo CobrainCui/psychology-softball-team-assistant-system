@@ -3,6 +3,11 @@
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { safeParseJSON } from "@/lib/safeParse";
 import {
+  readScopedItem,
+  writeScopedItem,
+  type DraftScope,
+} from "@/lib/scopedStorage";
+import {
   createGameArchive,
   migrateGameArchiveList,
   type GameArchive,
@@ -10,22 +15,26 @@ import {
   type SpeedRecord,
 } from "@/lib/gameArchive";
 
-export function loadGamesHistory(): GameArchive[] {
-  const raw = localStorage.getItem(STORAGE_KEYS.gamesHistory);
+export function loadGamesHistory(scope: DraftScope | null): GameArchive[] {
+  const raw = readScopedItem(STORAGE_KEYS.gamesHistory, scope);
   const parsed = safeParseJSON<unknown>(raw, []);
   return migrateGameArchiveList(parsed);
 }
 
-export function saveGamesHistory(history: GameArchive[]): void {
-  localStorage.setItem(STORAGE_KEYS.gamesHistory, JSON.stringify(history));
+export function saveGamesHistory(
+  scope: DraftScope | null,
+  history: GameArchive[]
+): void {
+  writeScopedItem(STORAGE_KEYS.gamesHistory, scope, JSON.stringify(history));
 }
 
 export function appendGameArchive(
+  scope: DraftScope | null,
   hits: HitRecord[],
   speedRecords: SpeedRecord[]
 ): GameArchive {
   const archived = createGameArchive(hits, speedRecords);
-  const history = loadGamesHistory();
-  saveGamesHistory([...history, archived]);
+  const history = loadGamesHistory(scope);
+  saveGamesHistory(scope, [...history, archived]);
   return archived;
 }

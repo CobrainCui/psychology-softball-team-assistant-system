@@ -93,6 +93,7 @@ export function useTestDayAssignments() {
   };
 
   const handleAddCustomTest = () => {
+    if (assignmentLocked) return false;
     const trimmedName = customTestName.trim();
     if (!trimmedName) return false;
     if (testItems.includes(trimmedName)) {

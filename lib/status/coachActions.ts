@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/db";
 import { getTodayDateStr, parseDateOnly } from "@/lib/dateOnly";
 import { QUADRANT_LABEL, type PreQuadrant } from "@/lib/clinical/preQuadrant";
-import { activityTypeLabel } from "@/lib/clinical/activityTypes";
+import { formatActivityLabels } from "@/lib/clinical/activityTypes";
 import {
   LOAD_TAG_COACH_HINT,
   LOAD_TAG_LABEL,
@@ -50,8 +50,6 @@ export type CoachSessionFeedbackRow = {
   playerName: string;
   activityLabel: string;
   sessionRpe: number;
-  durationMin: number;
-  sessionLoad: number;
 };
 
 export type CoachDaySummary = {
@@ -138,7 +136,13 @@ export async function getCoachDaySummary(
       }),
       prisma.sessionFeedback.findMany({
         where: { playerId: { in: playerIds }, date: day },
-        orderBy: { sessionLoad: "desc" },
+        orderBy: { sessionRpe: "desc" },
+        select: {
+          id: true,
+          playerId: true,
+          activityTypes: true,
+          sessionRpe: true,
+        },
       }),
       prisma.cycleProfile.findMany({
         where: { playerId: { in: playerIds } },
@@ -211,10 +215,8 @@ export async function getCoachDaySummary(
         id: row.id,
         playerId: row.playerId,
         playerName: nameById.get(row.playerId) ?? "未知",
-        activityLabel: activityTypeLabel(row.activityType),
+        activityLabel: formatActivityLabels(row.activityTypes),
         sessionRpe: row.sessionRpe,
-        durationMin: row.durationMin,
-        sessionLoad: row.sessionLoad,
       })
     );
 

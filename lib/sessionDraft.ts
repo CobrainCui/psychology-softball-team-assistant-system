@@ -1,6 +1,11 @@
 // 综合测试日当场草稿：刷新后恢复 hits / 速度 / 技能表 / 排阵 / 测试项，归档后清空。
 
-import { STORAGE_KEYS } from "@/lib/storageKeys";
+import {
+  readSessionDraftItem,
+  removeSessionDraftItem,
+  writeSessionDraftItem,
+  type DraftScope,
+} from "@/lib/scopedStorage";
 import { safeParseJSON } from "@/lib/safeParse";
 import {
   emptySkillArchiveSlice,
@@ -32,13 +37,14 @@ import {
   resolveSpeedGrid,
 } from "@/lib/testDay/speedGrid";
 import {
+  customTestSliceHasContent,
   emptyCustomTestSlice,
   ensureCustomTestDefs,
   parseCustomTestSlice,
   type CustomTestSlice,
 } from "@/lib/testDay/customTests";
 
-export const SESSION_DRAFT_SCHEMA_VERSION = 5;
+export const SESSION_DRAFT_SCHEMA_VERSION = 6;
 
 export const ROLE_ASSIGNMENT_ITEMS = ["投手", "一垒"] as const;
 
@@ -68,6 +74,8 @@ export interface SessionDraft extends SkillArchiveSlice, CustomTestSlice {
   assignmentLocked: boolean;
   committedAssignments: Assignments;
   assignmentLog: AssignmentCommit[];
+  currentBatterId: string;
+  flyCatchNoteDrafts: Record<string, string>;
 }
 
 export function isRoleAssignmentItem(item: string): boolean {
@@ -105,20 +113,66 @@ export function createEmptySessionDraft(
     assignmentLocked: false,
     committedAssignments: {},
     assignmentLog: [],
+    currentBatterId: "",
+    flyCatchNoteDrafts: {},
     ...emptySkillArchiveSlice(),
     ...emptyCustomTestSlice(),
   };
 }
 
-function parseAssignments(value: unknown): Assignments {
+export function parseAssignments(value: unknown): Assignments {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as Assignments;
+  const next: Assignments = {};
+  for (const [playerId, items] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(items)) continue;
+    next[playerId] = items.filter((item): item is string => typeof item === "string");
+  }
+  return next;
 }
 
-// 推导步骤：优先读新草稿 → 否则把旧 softball_hits 迁入 → 写回新 key 并清除旧 key
-export function loadSessionDraft(): SessionDraft {
+export function parseAssignmentLog(value: unknown): AssignmentCommit[] {
+  return Array.isArray(value) ? value.filter(isAssignmentCommit) : [];
+}
+
+function parseNoteDrafts(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const next: Record<string, string> = {};
+  for (const [playerId, note] of Object.entries(
+    value as Record<string, unknown>
+  )) {
+    if (typeof note === "string") next[playerId] = note;
+  }
+  return next;
+}
+
+export function sessionDraftIsEmpty(draft: SessionDraft): boolean {
+  const hasAssignments = Object.values(draft.assignments).some(
+    (items) => items.length > 0
+  );
+  const extraItems = draft.testItems.some((item) => !isDefaultTestItem(item));
+  const hasNotes = Object.values(draft.flyCatchNoteDrafts).some(
+    (note) => note.trim().length > 0
+  );
+  return (
+    draft.hits.length === 0 &&
+    draft.speedMarks.length === 0 &&
+    draft.flyCatchAttempts.length === 0 &&
+    draft.strikeJudgeColumns.length === 0 &&
+    draft.strikeJudgeCells.length === 0 &&
+    draft.throwPlays.length === 0 &&
+    !hasAssignments &&
+    !extraItems &&
+    !draft.assignmentLocked &&
+    draft.assignmentLog.length === 0 &&
+    !hasNotes &&
+    !customTestSliceHasContent(draft)
+  );
+}
+
+// 推导步骤：只读分区草稿；无后缀全局 key 由 scopedStorage 丢弃，禁止认领到当前账号
+export function loadSessionDraft(scope: DraftScope | null): SessionDraft {
   const empty = createEmptySessionDraft();
-  const draftRaw = localStorage.getItem(STORAGE_KEYS.sessionDraft);
+  const draftRaw = readSessionDraftItem(scope);
 
   if (draftRaw) {
     const parsed = safeParseJSON<unknown>(draftRaw, null);
@@ -158,9 +212,10 @@ export function loadSessionDraft(): SessionDraft {
         testItems,
         assignmentLocked: obj.assignmentLocked === true,
         committedAssignments: parseAssignments(obj.committedAssignments),
-        assignmentLog: Array.isArray(obj.assignmentLog)
-          ? obj.assignmentLog.filter(isAssignmentCommit)
-          : [],
+        assignmentLog: parseAssignmentLog(obj.assignmentLog),
+        currentBatterId:
+          typeof obj.currentBatterId === "string" ? obj.currentBatterId : "",
+        flyCatchNoteDrafts: parseNoteDrafts(obj.flyCatchNoteDrafts),
         flyCatchAttempts: Array.isArray(obj.flyCatchAttempts)
           ? obj.flyCatchAttempts.filter(isFlyCatchAttempt)
           : [],
@@ -185,23 +240,18 @@ export function loadSessionDraft(): SessionDraft {
     }
   }
 
-  // 兼容旧版：仅有 softball_hits 时迁入草稿
-  const legacyHitsRaw = localStorage.getItem(STORAGE_KEYS.hitsLegacy);
-  if (legacyHitsRaw) {
-    const legacyHits = safeParseJSON<unknown>(legacyHitsRaw, []);
-    const hits = Array.isArray(legacyHits)
-      ? legacyHits.filter(isHitRecord)
-      : [];
-    const migrated = { ...empty, hits };
-    saveSessionDraft(migrated);
-    localStorage.removeItem(STORAGE_KEYS.hitsLegacy);
-    return migrated;
-  }
-
   return empty;
 }
 
-export function saveSessionDraft(draft: SessionDraft): void {
+export function saveSessionDraft(
+  scope: DraftScope | null,
+  draft: SessionDraft
+): boolean {
+  if (!scope) return false;
+  if (sessionDraftIsEmpty(draft)) {
+    removeSessionDraftItem(scope);
+    return false;
+  }
   const payload: SessionDraft = {
     schemaVersion: SESSION_DRAFT_SCHEMA_VERSION,
     hits: draft.hits,
@@ -213,6 +263,8 @@ export function saveSessionDraft(draft: SessionDraft): void {
     assignmentLocked: draft.assignmentLocked,
     committedAssignments: cloneAssignments(draft.committedAssignments),
     assignmentLog: draft.assignmentLog,
+    currentBatterId: draft.currentBatterId,
+    flyCatchNoteDrafts: draft.flyCatchNoteDrafts,
     flyCatchAttempts: draft.flyCatchAttempts,
     strikeJudgeColumns: draft.strikeJudgeColumns,
     strikeJudgeCells: draft.strikeJudgeCells,
@@ -226,14 +278,12 @@ export function saveSessionDraft(draft: SessionDraft): void {
     customGroupNotes: draft.customGroupNotes,
     customSingleNotes: draft.customSingleNotes,
   };
-  localStorage.setItem(STORAGE_KEYS.sessionDraft, JSON.stringify(payload));
-  // 写入新草稿后不再保留旧 hits key，避免双源互相覆盖
-  localStorage.removeItem(STORAGE_KEYS.hitsLegacy);
+  writeSessionDraftItem(scope, JSON.stringify(payload));
+  return true;
 }
 
-export function clearSessionDraft(): void {
-  localStorage.removeItem(STORAGE_KEYS.sessionDraft);
-  localStorage.removeItem(STORAGE_KEYS.hitsLegacy);
+export function clearSessionDraft(scope: DraftScope | null): void {
+  removeSessionDraftItem(scope);
 }
 
 export type {

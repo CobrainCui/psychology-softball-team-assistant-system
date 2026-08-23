@@ -1,8 +1,9 @@
 /**
  * 真实 Action / API / session 权限回归（写测试库并清理）
  * npm run verify:auth-actions
+ * 必须配置独立 TEST_DATABASE_URL，见 scripts/loadTestDb.ts。
  */
-import "dotenv/config";
+import "./loadTestDb";
 import { prisma } from "../lib/db";
 import { getOrCreateDefaultTeam } from "../lib/team";
 import { hashPassword } from "../lib/auth/password";
@@ -34,6 +35,7 @@ import { saveTestSession } from "../lib/actions";
 import { registerWithEnrollmentCode } from "../lib/auth/enrollActions";
 import { approveMembershipClaim, rejectMembershipClaim } from "../lib/auth/claimActions";
 import { grantRole } from "../lib/auth/roleActions";
+import { listAccountsForAdmin } from "../lib/auth/adminActions";
 import {
   consumePasswordResetToken,
   createPasswordResetLink,
@@ -75,7 +77,7 @@ async function seedAccount(input: {
   teamId: string;
   username: string;
   roles: RoleKind[];
-  claim: "pending" | "approved";
+  claim: "pending" | "approved" | "none";
   displayName: string;
 }): Promise<Seeded> {
   const passwordHash = await hashPassword(PASSWORD);
@@ -106,15 +108,17 @@ async function seedAccount(input: {
     });
   }
 
-  await prisma.membershipClaim.create({
-    data: {
-      accountId: account.id,
-      status: input.claim,
-      displayName: input.displayName,
-      playerId: player?.id ?? null,
-      reviewedAt: input.claim === "approved" ? new Date() : null,
-    },
-  });
+  if (input.claim !== "none") {
+    await prisma.membershipClaim.create({
+      data: {
+        accountId: account.id,
+        status: input.claim,
+        displayName: input.displayName,
+        playerId: player?.id ?? null,
+        reviewedAt: input.claim === "approved" ? new Date() : null,
+      },
+    });
+  }
 
   const token = await createSession(account.id);
   return {
@@ -238,8 +242,8 @@ async function main() {
     const admin = await seedAccount({
       teamId: team.id,
       username: `${runId}_ad`,
-      roles: ["player", "admin"],
-      claim: "approved",
+      roles: ["admin"],
+      claim: "none",
       displayName: `${runId}_ad`,
     });
     usernames.push(
@@ -258,8 +262,7 @@ async function main() {
       `${runId}_racep`,
       `${runId}_pl`,
       `${runId}_cap`,
-      `${runId}_co`,
-      `${runId}_ad`
+      `${runId}_co`
     );
 
     await asUser(undefined);
@@ -332,6 +335,12 @@ async function main() {
     const grantPending = await grantRole(pending.accountId, "coach");
     if (!grantPending.success) pass("cannot grant elevated role to pending");
     else fail("cannot grant elevated role to pending");
+    const grantPendingAdmin = await grantRole(pending.accountId, "admin");
+    if (!grantPendingAdmin.success) pass("cannot grant admin to pending");
+    else fail("cannot grant admin to pending");
+    const adminList = await listAccountsForAdmin();
+    if (adminList.success) pass("ops admin can list accounts");
+    else fail(`ops admin can list accounts (${adminList.success === false ? adminList.error : ""})`);
 
     await asUser(pendingCoach.token);
     const pendingCoachHealth = await getCoachDaySummary();
@@ -357,9 +366,8 @@ async function main() {
     const today = getTodayDateStr();
     const fb = await saveSessionFeedback({
       date: today,
-      activityType: "batting",
+      activityTypes: ["batting"],
       sessionRpe: 5,
-      durationMin: 60,
       note: secretNote,
     });
     if (fb.success) pass("player can write own feedback today");
@@ -565,6 +573,19 @@ async function main() {
     const adminHealth = await getCoachDaySummary();
     if (!adminHealth.success) pass("admin without coach denied health");
     else fail("admin without coach denied health");
+    const adminWrite = await saveReadinessAssessment({
+      date: getTodayDateStr(),
+      sleep: 3,
+      stress: 3,
+      fatigue: 3,
+      soreness: 3,
+      willingness: 3,
+      physicalBattery: 3,
+      mentalDrive: 3,
+      quadrant: "slack",
+    });
+    if (!adminWrite.success) pass("ops admin cannot write health");
+    else fail("ops admin cannot write health");
 
     await asUser(coach.token);
     const coachSummary = await getCoachDaySummary();

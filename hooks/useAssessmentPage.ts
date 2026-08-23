@@ -30,10 +30,7 @@ import type {
   CycleProfileDto,
   CycleSharingLevel,
 } from "@/lib/cycleTypes";
-import {
-  getPeriodStartDate,
-  setPeriodStartDate as persistPeriodStartDate,
-} from "@/lib/periodStart";
+import { draftScopeFromUser } from "@/lib/scopedStorage";
 import type { SessionUser } from "@/lib/auth/types";
 
 export type AssessmentResultView = {
@@ -65,57 +62,57 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
   const [result, setResult] = useState<AssessmentResultView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const draftScope = draftScopeFromUser(currentUser);
+
+  // 推导步骤：accountId 变化则清空内存并从云端重载；经期日不以本地缓存为权威
   useEffect(() => {
     if (!isMounted || !currentUser) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setIsLoadingHistory(true);
-      if (currentUser.gender === "female" && currentUser.playerId) {
-        setPeriodStartDate(getPeriodStartDate(currentUser.playerId));
-      }
+      setPeriodStartDate("");
+      setCycleProfile(null);
+      setResult(null);
       void (async () => {
-      const readinessRes = await getReadinessHistory();
-      if (cancelled) return;
-      if (!readinessRes.success) {
-        console.error("云端被拒:", readinessRes.error);
-        setHistory([]);
-        setHasTodayCheck(false);
-      } else {
-        setHistory(readinessRes.history);
-        const today = getTodayDateStr();
-        const todayEntry = readinessRes.history.find((item) => item.date === today);
-        if (todayEntry) {
-          setSleep(todayEntry.sleep);
-          setStress(todayEntry.stress);
-          setFatigue(todayEntry.fatigue);
-          setSoreness(todayEntry.soreness);
-          setWillingness(todayEntry.willingness);
-          setHasTodayCheck(true);
-        } else {
+        const readinessRes = await getReadinessHistory();
+        if (cancelled) return;
+        if (!readinessRes.success) {
+          console.error("云端被拒:", readinessRes.error);
+          setHistory([]);
           setHasTodayCheck(false);
-        }
-      }
-      if (currentUser.gender === "female") {
-        const cycleRes = await getCycleProfile();
-        if (!cancelled && cycleRes.success) {
-          setCycleProfile(cycleRes.profile);
-          if (cycleRes.profile?.lastPeriodStart && currentUser.playerId) {
-            setPeriodStartDate(cycleRes.profile.lastPeriodStart);
-            persistPeriodStartDate(
-              currentUser.playerId,
-              cycleRes.profile.lastPeriodStart
-            );
+        } else {
+          setHistory(readinessRes.history);
+          const today = getTodayDateStr();
+          const todayEntry = readinessRes.history.find((item) => item.date === today);
+          if (todayEntry) {
+            setSleep(todayEntry.sleep);
+            setStress(todayEntry.stress);
+            setFatigue(todayEntry.fatigue);
+            setSoreness(todayEntry.soreness);
+            setWillingness(todayEntry.willingness);
+            setHasTodayCheck(true);
+          } else {
+            setHasTodayCheck(false);
           }
         }
-      }
-      if (!cancelled) setIsLoadingHistory(false);
-    })();
+        if (currentUser.gender === "female") {
+          const cycleRes = await getCycleProfile();
+          if (!cancelled && cycleRes.success) {
+            setCycleProfile(cycleRes.profile);
+            if (cycleRes.profile?.lastPeriodStart) {
+              setPeriodStartDate(cycleRes.profile.lastPeriodStart);
+            }
+          }
+        }
+        if (!cancelled) setIsLoadingHistory(false);
+      })();
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [isMounted, currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 按 accountId 重载，避免 SessionUser 对象引用抖动
+  }, [isMounted, currentUser?.accountId, currentUser?.playerId, currentUser?.gender]);
 
   const isFemale = isMounted && currentUser?.gender === "female";
   const cycleTracking =
@@ -187,7 +184,7 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
       } else {
         console.error("云端被拒:", res.error);
         setNotice("云端同步失败，已保存为本地草稿。");
-        upsertReadinessEntry(entry);
+        upsertReadinessEntry(draftScope, entry);
         setHasTodayCheck(true);
       }
       setHistory((prev) => {
@@ -252,7 +249,7 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
     }
     if (!currentUser?.playerId) return;
     const playerId = currentUser.playerId;
-    removeReadinessEntry(playerId, date);
+    removeReadinessEntry(draftScope, playerId, date);
     setHistory((prev) =>
       prev.filter(
         (item) =>
@@ -265,16 +262,13 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
 
   const applyCycleProfile = (profile: NonNullable<typeof cycleProfile>) => {
     setCycleProfile(profile);
-    if (profile.lastPeriodStart && currentUser?.playerId) {
+    if (profile.lastPeriodStart) {
       setPeriodStartDate(profile.lastPeriodStart);
-      persistPeriodStartDate(currentUser.playerId, profile.lastPeriodStart);
     }
   };
 
   const handleRecordPeriodStart = async () => {
     if (!currentUser?.playerId || !cycleTracking || !periodStartDate) return;
-    const playerId = currentUser.playerId;
-    persistPeriodStartDate(playerId, periodStartDate);
     const res = await recordPeriodStart({
       date: periodStartDate,
       crampsScore,
@@ -313,14 +307,12 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
     }
     applyCycleProfile(res.profile);
     if (!res.profile.lastPeriodStart) {
-      if (currentUser?.playerId) persistPeriodStartDate(currentUser.playerId, "");
       setPeriodStartDate("");
     }
   };
 
   const handlePeriodDateChange = (next: string) => {
     setPeriodStartDate(next);
-    if (currentUser?.playerId) persistPeriodStartDate(currentUser.playerId, next);
   };
 
   const patchCycleSettings = async (
@@ -338,7 +330,6 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
     dimValues,
     periodStartDate,
     setPeriodStartDate,
-    persistPeriodStartDate,
     cycleIrregular,
     setCycleIrregular,
     cycleProfile,

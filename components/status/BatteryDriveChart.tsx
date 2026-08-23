@@ -28,16 +28,16 @@ export function BatteryDriveChart({
         <div className="border-r border-zinc-200" />
         <div />
       </div>
-      <span className="absolute left-2 top-2 text-[10px] text-zinc-400">
+      <span className="absolute left-2 top-2 text-xs text-zinc-400">
         动力高 · 电量低
       </span>
-      <span className="absolute right-2 top-2 text-[10px] text-zinc-400">
+      <span className="absolute right-2 top-2 text-xs text-zinc-400">
         动力高 · 电量高
       </span>
-      <span className="absolute bottom-6 left-2 text-[10px] text-zinc-400">
+      <span className="absolute bottom-6 left-2 text-xs text-zinc-400">
         动力低 · 电量低
       </span>
-      <span className="absolute bottom-6 right-2 text-[10px] text-zinc-400">
+      <span className="absolute bottom-6 right-2 text-xs text-zinc-400">
         动力低 · 电量高
       </span>
       <div
@@ -45,10 +45,10 @@ export function BatteryDriveChart({
         style={{ left: `${left}%`, bottom: `${bottom}%` }}
         title={label}
       />
-      <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] uppercase text-zinc-400">
+      <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-xs uppercase text-zinc-400">
         身体电量
       </span>
-      <span className="absolute top-1/2 left-1 -translate-y-1/2 -rotate-90 text-[10px] uppercase text-zinc-400">
+      <span className="absolute top-1/2 left-1 -translate-y-1/2 -rotate-90 text-xs uppercase text-zinc-400">
         心理动力
       </span>
     </div>

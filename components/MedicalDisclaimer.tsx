@@ -10,7 +10,7 @@ export default function MedicalDisclaimer({
 }: MedicalDisclaimerProps) {
   if (variant === "compact") {
     return (
-      <p className="text-center text-[11px] leading-relaxed text-zinc-400">
+      <p className="text-center text-xs leading-relaxed text-zinc-400">
         本系统仅供训练辅助参考，不构成医疗诊断或处方。周期同步建议同理。出现明显伤痛请停止训练并寻求专业医疗介入。
       </p>
     );

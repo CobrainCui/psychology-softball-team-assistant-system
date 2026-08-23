@@ -6,13 +6,12 @@ import Link from "next/link";
 import MedicalDisclaimer from "@/components/MedicalDisclaimer";
 import PageLoading from "@/components/PageLoading";
 import { RecordActions } from "@/components/records/RecordActions";
+import { ActivityTypePicker } from "@/components/status/ActivityTypePicker";
 import {
-  ACTIVITY_TYPE_OPTIONS,
-  DURATION_HINT,
-  RPE_MINDFUL_PROMPT,
-  RPE_SCALE_TICKS,
-  activityTypeLabel,
-  type ActivityType,
+  FATIGUE_SCALE_TICKS,
+  fatigueTickLabel,
+  formatActivityLabels,
+  normalizeActivityTypes,
 } from "@/lib/clinical/activityTypes";
 import type { PostSaveFeedbackView } from "@/lib/clinical/postSaveFeedback";
 import {
@@ -31,16 +30,15 @@ import {
   type SessionFeedbackEntry,
 } from "@/lib/sessionFeedback";
 import { useRequireAuth } from "@/lib/useRequireAuth";
+import { draftScopeFromUser } from "@/lib/scopedStorage";
 
-const DEFAULT_DURATION_MIN = 90;
+const DEFAULT_ACTIVITY = ["batting"];
 
 type ListedFeedback = {
   id: string;
   source: "cloud" | "local";
-  activityType: ActivityType;
+  activityTypes: string[];
   sessionRpe: number;
-  durationMin: number;
-  sessionLoad: number;
   note: string | null;
 };
 
@@ -52,10 +50,8 @@ function fromLocal(entry: SessionFeedbackEntry): ListedFeedback {
   return {
     id: entry.id,
     source: "local",
-    activityType: entry.activityType,
+    activityTypes: entry.activityTypes,
     sessionRpe: entry.sessionRpe,
-    durationMin: entry.durationMin,
-    sessionLoad: entry.sessionLoad,
     note: entry.note,
   };
 }
@@ -63,9 +59,8 @@ function fromLocal(entry: SessionFeedbackEntry): ListedFeedback {
 export default function SessionFeedbackPage() {
   const { currentUser, isMounted } = useRequireAuth();
   const router = useRouter();
-  const [activityType, setActivityType] = useState<ActivityType>("batting");
+  const [activityTypes, setActivityTypes] = useState<string[]>(DEFAULT_ACTIVITY);
   const [sessionRpe, setSessionRpe] = useState(5);
-  const [durationMin, setDurationMin] = useState(DEFAULT_DURATION_MIN);
   const [note, setNote] = useState("");
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "local">(
     "idle"
@@ -78,10 +73,11 @@ export default function SessionFeedbackPage() {
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const scope = draftScopeFromUser(currentUser);
+
   const resetForm = () => {
-    setActivityType("batting");
+    setActivityTypes(DEFAULT_ACTIVITY);
     setSessionRpe(5);
-    setDurationMin(DEFAULT_DURATION_MIN);
     setNote("");
     setEditing(null);
   };
@@ -91,7 +87,7 @@ export default function SessionFeedbackPage() {
     const res = await getSessionFeedbacks(date);
     const cloud = res.success ? res.entries.map(fromCloud) : [];
     if (!res.success) console.error("云端被拒:", res.error);
-    const local = loadPlayerSessionFeedbackDrafts(playerId, date)
+    const local = loadPlayerSessionFeedbackDrafts(scope, playerId, date)
       .filter((draft) => !cloud.some((row) => row.id === draft.id))
       .map(fromLocal);
     setEntries([...cloud, ...local]);
@@ -106,30 +102,36 @@ export default function SessionFeedbackPage() {
     if (!currentUser.playerId) return;
     const playerId = currentUser.playerId;
     const timer = window.setTimeout(() => {
+      setEntries([]);
+      resetForm();
       void reloadList(playerId);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [isMounted, currentUser, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 按账号重载当日列表
+  }, [isMounted, currentUser?.accountId, currentUser?.playerId, currentUser, router]);
 
   const handleSubmit = async () => {
     if (!currentUser?.playerId || status === "saving") return;
+    const typesRes = normalizeActivityTypes(activityTypes);
+    if (!typesRes.success) {
+      setNotice(typesRes.error);
+      return;
+    }
     const playerId = currentUser.playerId;
     setStatus("saving");
     const date = getTodayDateStr();
     const noteTrimmed = note.trim() ? note.trim().slice(0, 200) : null;
     const payload = {
       date,
-      activityType,
+      activityTypes: typesRes.types,
       sessionRpe,
-      durationMin,
       note: noteTrimmed,
     };
 
     if (editing?.source === "local") {
-      updateSessionFeedbackDraft(editing.id, {
-        activityType,
+      updateSessionFeedbackDraft(scope, editing.id, {
+        activityTypes: typesRes.types,
         sessionRpe,
-        durationMin,
         note: noteTrimmed,
       });
       setStatus("local");
@@ -161,13 +163,12 @@ export default function SessionFeedbackPage() {
       resetForm();
     } else {
       console.error("云端被拒:", res.error);
-      appendSessionFeedbackDraft({
+      appendSessionFeedbackDraft(scope, {
         playerId,
         playerName: currentUser.playerName ?? currentUser.username,
         date,
-        activityType,
+        activityTypes: typesRes.types,
         sessionRpe,
-        durationMin,
         note: noteTrimmed,
       });
       setStatus("local");
@@ -179,9 +180,10 @@ export default function SessionFeedbackPage() {
 
   const handleBeginEdit = (item: ListedFeedback) => {
     setEditing({ id: item.id, source: item.source });
-    setActivityType(item.activityType);
+    setActivityTypes(
+      item.activityTypes.length > 0 ? item.activityTypes : DEFAULT_ACTIVITY
+    );
     setSessionRpe(item.sessionRpe);
-    setDurationMin(item.durationMin);
     setNote(item.note ?? "");
     setView(null);
     setStatus("idle");
@@ -191,7 +193,7 @@ export default function SessionFeedbackPage() {
     if (!currentUser?.playerId) return;
     const playerId = currentUser.playerId;
     if (item.source === "local") {
-      deleteSessionFeedbackDraft(item.id);
+      deleteSessionFeedbackDraft(scope, item.id);
     } else {
       const res = await deleteSessionFeedback({
         id: item.id,
@@ -209,7 +211,7 @@ export default function SessionFeedbackPage() {
   if (!isMounted || !currentUser || currentUser.roles.includes("coach")) {
     return <PageLoading />;
   }
-  const rpeTip = RPE_SCALE_TICKS.find((t) => t.value === sessionRpe)?.label;
+  const fatigueTip = fatigueTickLabel(sessionRpe);
 
   return (
     <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
@@ -236,8 +238,8 @@ export default function SessionFeedbackPage() {
                 className="flex items-start justify-between gap-2 text-xs text-zinc-600"
               >
                 <span>
-                  {activityTypeLabel(item.activityType)} · RPE {item.sessionRpe} ·{" "}
-                  {item.durationMin} 分钟 · 负荷 {item.sessionLoad}
+                  {formatActivityLabels(item.activityTypes)} · 疲劳{" "}
+                  {item.sessionRpe}
                   {item.source === "local" ? " · 本地草稿" : ""}
                   {editing?.id === item.id ? " · 修改中" : ""}
                 </span>
@@ -250,32 +252,12 @@ export default function SessionFeedbackPage() {
             ))}
           </ul>
         ) : null}
+        <ActivityTypePicker
+          selected={activityTypes}
+          onChange={setActivityTypes}
+        />
         <div className="flex flex-col gap-2 border border-zinc-200 p-4">
-          <label className="text-xs uppercase text-gray-500">活动类型</label>
-          <div className="flex flex-wrap gap-1">
-            {ACTIVITY_TYPE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setActivityType(opt.value)}
-                className={`border px-3 py-1.5 text-xs ${
-                  activityType === opt.value
-                    ? "border-zinc-900 bg-zinc-900 text-white"
-                    : "border-zinc-300 text-zinc-600"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="flex flex-col gap-2 border border-zinc-200 p-4">
-          <label className="text-xs uppercase text-gray-500">
-            主观运动强度 (RPE 1–10)
-          </label>
-          <p className="text-xs leading-relaxed text-zinc-500">
-            {RPE_MINDFUL_PROMPT}
-          </p>
+          <label className="text-xs uppercase text-gray-500">疲劳程度</label>
           <input
             type="range"
             min={1}
@@ -283,29 +265,20 @@ export default function SessionFeedbackPage() {
             step={1}
             value={sessionRpe}
             onChange={(e) => setSessionRpe(Number(e.target.value))}
-            className="accent-zinc-900"
+            className="w-full accent-zinc-900"
           />
+          <div className="flex justify-between px-0.5" aria-hidden>
+            {FATIGUE_SCALE_TICKS.map((tick) => (
+              <span key={tick.value} className="h-1.5 w-px bg-zinc-500" />
+            ))}
+          </div>
           <span className="text-right font-mono text-sm text-zinc-900">
             {sessionRpe}
-            {rpeTip ? ` · ${rpeTip}` : ""}
+            {fatigueTip ? ` · ${fatigueTip}` : ""}
           </span>
         </div>
         <div className="flex flex-col gap-2 border border-zinc-200 p-4">
-          <label className="text-xs uppercase text-gray-500">时长（分钟）</label>
-          <p className="text-xs leading-relaxed text-zinc-500">{DURATION_HINT}</p>
-          <input
-            type="number"
-            min={1}
-            max={360}
-            value={durationMin}
-            onChange={(e) => setDurationMin(Number(e.target.value))}
-            className="border border-zinc-300 px-3 py-2 font-mono text-sm"
-          />
-        </div>
-        <div className="flex flex-col gap-2 border border-zinc-200 p-4">
-          <label className="text-xs uppercase text-gray-500">
-            私密备注（仅教练可见，可选）
-          </label>
+          <label className="text-xs uppercase text-gray-500">备注（选填）</label>
           <textarea
             maxLength={200}
             value={note}
@@ -339,48 +312,6 @@ export default function SessionFeedbackPage() {
         {view && (
           <div className="flex flex-col gap-2 border-2 border-zinc-900 bg-white p-4">
             <p className="text-sm text-zinc-700">{view.sessionLine}</p>
-            <p className="font-mono text-lg">负荷 {view.sessionLoad}</p>
-            {view.sessionLoadInsufficient ? (
-              <p className="text-sm text-zinc-500">
-                {view.sessionLoadInsufficientText}
-              </p>
-            ) : (
-              view.sessionLoadExplain && (
-                <div className="text-sm leading-relaxed text-zinc-700">
-                  <p>{view.sessionLoadExplain.mainLine}</p>
-                  {view.sessionLoadExplain.detailLine && (
-                    <p className="mt-1 text-xs text-zinc-500">
-                      {view.sessionLoadExplain.detailLine}
-                    </p>
-                  )}
-                </div>
-              )
-            )}
-            {view.dailyVisible && (
-              <div className="border-t border-zinc-200 pt-2 text-sm text-zinc-700">
-                <p>{view.dailyCountLine}</p>
-                <p>{view.dailyTotalLine}</p>
-                {view.dailyLoadInsufficient ? (
-                  <p className="text-zinc-500">{view.dailyLoadInsufficientText}</p>
-                ) : (
-                  view.dailyLoadExplain && (
-                    <>
-                      <p>{view.dailyLoadExplain.mainLine}</p>
-                      {view.dailyLoadExplain.detailLine && (
-                        <p className="text-xs text-zinc-500">
-                          {view.dailyLoadExplain.detailLine}
-                        </p>
-                      )}
-                    </>
-                  )
-                )}
-              </div>
-            )}
-            {view.preContextVisible && (
-              <p className="whitespace-pre-line text-sm text-amber-800">
-                {view.preContextText}
-              </p>
-            )}
             {view.injuryContextVisible && (
               <p className="text-sm text-zinc-700">
                 {view.injuryContextText}{" "}

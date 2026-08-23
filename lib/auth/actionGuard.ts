@@ -15,6 +15,8 @@ import {
   canViewTeamOps,
   canViewTeamSeasonReports,
   canWriteOwnHealthData,
+  canCreateTestDayDraft,
+  canJoinTestDayDraft,
   denyUnless,
 } from "@/lib/auth/policy";
 
@@ -65,6 +67,34 @@ export async function requireArchiver(): Promise<
   );
   if (!gate.ok) return { success: false, error: gate.error };
   return { success: true, ctx: session.ctx };
+}
+
+export async function requireTestDayDraftCreator(): Promise<
+  ActionResult<{ ctx: AuthContext }>
+> {
+  const session = await requireSessionAction();
+  if (!session.success) return session;
+  const gate = denyUnless(
+    canCreateTestDayDraft(session.ctx),
+    "仅队长或教练可创建协作测试日"
+  );
+  if (!gate.ok) return { success: false, error: gate.error };
+  return { success: true, ctx: session.ctx };
+}
+
+export async function requireTestDayDraftJoiner(): Promise<
+  ActionResult<{ ctx: AuthContext; playerId: string }>
+> {
+  const session = await requireSessionAction();
+  if (!session.success) return session;
+  const gate = denyUnless(
+    canJoinTestDayDraft(session.ctx),
+    "请先完成名册认领"
+  );
+  if (!gate.ok) return { success: false, error: gate.error };
+  const approved = assertApproved(session.ctx);
+  if (!approved.ok) return { success: false, error: approved.error };
+  return { success: true, ctx: session.ctx, playerId: approved.playerId };
 }
 
 export async function requireAdmin(): Promise<

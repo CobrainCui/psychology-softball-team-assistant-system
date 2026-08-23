@@ -155,7 +155,7 @@ export async function getPlayerProfileData(): Promise<
       })),
       postList: postRows.map((r) => ({
         date: formatDateOnly(r.date),
-        sessionLoad: r.sessionLoad,
+        sessionLoad: r.sessionRpe,
       })),
       painList,
     });

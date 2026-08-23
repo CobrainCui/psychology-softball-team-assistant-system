@@ -1,8 +1,14 @@
 /**
- * 临床规则引擎回归：四象限 / 周期长度 / 训后负荷。
+ * 临床规则引擎回归：四象限 / 周期长度 / 训后活动类型。
  * npx tsx scripts/verify-clinical.ts
  */
-import { computeSessionLoad } from "../lib/clinical/activityTypes";
+import {
+  ACTIVITY_TYPE_OPTIONS,
+  FATIGUE_SCALE_TICKS,
+  formatActivityLabels,
+  normalizeActivityTypes,
+  parseActivityTypes,
+} from "../lib/clinical/activityTypes";
 import {
   resolveCycleLength,
   computePeriodIntervals,
@@ -72,7 +78,46 @@ const cycle = resolveCycleLength([
 assert(cycle.typicalLengthDays === 28, "剔除 outlier 后典型长度 28");
 assert(cycle.intervalCount === 2, "outlier 间隔不计入 cleaned");
 
-assert(computeSessionLoad(5, 90) === 450, "RPE 5 × 90min = 450");
+assert(
+  ACTIVITY_TYPE_OPTIONS.some((o) => o.value === "throwing_defense" && o.label === "防守"),
+  "传杀防守已改为防守"
+);
+assert(
+  !ACTIVITY_TYPE_OPTIONS.some((o) => o.label === "其他"),
+  "预设不含其他"
+);
+assert(
+  formatActivityLabels(["batting", "throwing_defense"]) === "打击、防守",
+  "多选活动标签拼接"
+);
+assert(
+  formatActivityLabels([]) === "未分类",
+  "空活动类型显示未分类"
+);
+const mapped = normalizeActivityTypes(["打击", "传杀防守"]);
+assert(
+  mapped.success &&
+    mapped.types[0] === "batting" &&
+    mapped.types[1] === "throwing_defense",
+  "中文标签收成预设 code"
+);
+const emptyTypes = normalizeActivityTypes([]);
+assert(!emptyTypes.success, "活动类型至少一项");
+const customTooLong = normalizeActivityTypes(["x".repeat(17)]);
+assert(!customTooLong.success, "自定义活动最长 16 字");
+assert(
+  parseActivityTypes(["other", "batting"]).join(",") === "batting",
+  "旧 other 读取时丢弃"
+);
+assert(
+  formatActivityLabels(["batting", "力量"]) === "打击、力量",
+  "自定义活动原文上屏"
+);
+assert(
+  FATIGUE_SCALE_TICKS.length === 10 &&
+    FATIGUE_SCALE_TICKS.every((t) => t.label.length > 0),
+  "疲劳 1–10 均有文案"
+);
 
 if (failed > 0) {
   console.error(`verify-clinical: ${failed} failed`);

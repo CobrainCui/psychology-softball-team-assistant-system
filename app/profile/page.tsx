@@ -14,6 +14,7 @@ import { requestRoleChange } from "@/lib/auth/roleActions";
 import { updatePlayer } from "@/lib/playersApi";
 import { loadPlayerReadinessHistory } from "@/lib/readinessHistory";
 import { loadPlayerInjuryCaseDrafts } from "@/lib/injuryCases";
+import { draftScopeFromUser } from "@/lib/scopedStorage";
 import { PAIN_AREA_LABEL } from "@/lib/clinical/painAreas";
 import { quadrantLabel } from "@/lib/clinical/preQuadrant";
 import SoftballFieldSvg from "@/components/test-day/SoftballFieldSvg";
@@ -101,7 +102,11 @@ export default function ProfilePage() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setDisplayName(currentUser.playerName ?? currentUser.username);
-      const readiness = loadPlayerReadinessHistory(currentUser.playerId!);
+      const scope = draftScopeFromUser(currentUser);
+      const readiness = loadPlayerReadinessHistory(
+        scope,
+        currentUser.playerId!
+      );
       if (readiness[0]) {
         setLatestStatus({
           date: readiness[0].date,
@@ -111,7 +116,10 @@ export default function ProfilePage() {
           mentalDrive: readiness[0].mentalDrive,
         });
       }
-      const drafts = loadPlayerInjuryCaseDrafts(currentUser.playerId!);
+      const drafts = loadPlayerInjuryCaseDrafts(
+        scope,
+        currentUser.playerId!
+      );
       if (drafts.length > 0) {
         setInjuryCases(
           drafts.slice(0, 8).map((c) => ({
@@ -148,7 +156,7 @@ export default function ProfilePage() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [isMounted, currentUser]);
+  }, [isMounted, currentUser?.accountId, currentUser?.playerId, currentUser]);
 
   if (!isMounted || !currentUser) return <PageLoading />;
 
@@ -262,31 +270,40 @@ export default function ProfilePage() {
         {currentUser.claimStatus === "approved" &&
         (!currentUser.roles.includes("captain") ||
           !currentUser.roles.includes("coach")) ? (
-          <div className="flex justify-center gap-4 text-xs text-zinc-600">
-            {!currentUser.roles.includes("captain") ? (
-              <button
-                type="button"
-                className="underline"
-                onClick={async () => {
-                  const res = await requestRoleChange("captain");
-                  setNotice(res.success ? "已提交队长申请，待管理员审批" : res.error);
-                }}
-              >
-                申请队长
-              </button>
-            ) : null}
-            {!currentUser.roles.includes("coach") ? (
-              <button
-                type="button"
-                className="underline"
-                onClick={async () => {
-                  const res = await requestRoleChange("coach");
-                  setNotice(res.success ? "已提交教练申请，待管理员审批" : res.error);
-                }}
-              >
-                申请教练
-              </button>
-            ) : null}
+          <div className="flex flex-col items-center gap-2 text-xs text-zinc-600">
+            <p className="text-zinc-400">
+              队长/教练由管理员直接设置。以下申请可选，不是必经步骤。
+            </p>
+            <div className="flex justify-center gap-4">
+              {!currentUser.roles.includes("captain") ? (
+                <button
+                  type="button"
+                  className="underline"
+                  onClick={async () => {
+                    const res = await requestRoleChange("captain");
+                    setNotice(
+                      res.success ? "已提交队长申请，待管理员审批" : res.error
+                    );
+                  }}
+                >
+                  申请队长
+                </button>
+              ) : null}
+              {!currentUser.roles.includes("coach") ? (
+                <button
+                  type="button"
+                  className="underline"
+                  onClick={async () => {
+                    const res = await requestRoleChange("coach");
+                    setNotice(
+                      res.success ? "已提交教练申请，待管理员审批" : res.error
+                    );
+                  }}
+                >
+                  申请教练
+                </button>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

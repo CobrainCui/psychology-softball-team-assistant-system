@@ -28,16 +28,16 @@ export function TeamQuadrantChart({ points }: { points: CoachPlotPoint[] }) {
         <div className="border-r border-zinc-200 bg-zinc-50/40" />
         <div />
       </div>
-      <span className="absolute left-2 top-2 text-[10px] text-zinc-400">
+      <span className="absolute left-2 top-2 text-xs text-zinc-400">
         想动但电量低
       </span>
-      <span className="absolute right-2 top-2 text-[10px] text-zinc-400">
+      <span className="absolute right-2 top-2 text-xs text-zinc-400">
         在线
       </span>
-      <span className="absolute bottom-6 left-2 text-[10px] text-zinc-400">
+      <span className="absolute bottom-6 left-2 text-xs text-zinc-400">
         身心都紧
       </span>
-      <span className="absolute bottom-6 right-2 text-[10px] text-zinc-400">
+      <span className="absolute bottom-6 right-2 text-xs text-zinc-400">
         身体好但不想动
       </span>
       {points.map((p) => (
@@ -50,12 +50,12 @@ export function TeamQuadrantChart({ points }: { points: CoachPlotPoint[] }) {
           }}
           title={`${p.playerName} · ${p.quadrantLabel}`}
         >
-          <span className="flex h-6 min-w-6 items-center justify-center rounded-full border border-zinc-900 bg-white px-1 text-[10px] font-medium">
+          <span className="flex h-7 min-w-7 items-center justify-center rounded-full border border-zinc-900 bg-white px-1.5 text-xs font-medium">
             {initials(p.playerName)}
           </span>
         </div>
       ))}
-      <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] uppercase text-zinc-400">
+      <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-xs uppercase text-zinc-400">
         身体电量 →
       </span>
     </div>

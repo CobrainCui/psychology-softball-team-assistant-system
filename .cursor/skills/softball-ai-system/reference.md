@@ -6,12 +6,13 @@ Agent 需要路径、模型或存储键时再读本文件。权威仍以代码�
 
 | 路径 | 角色 | 职责 |
 |------|------|------|
-| `/` | 已认领 | 测试清单。未登录由 middleware + 页面服务端跳转 `/login`。 |
+| `/` | 已认领 | 测试日大厅：本队进行中云端草稿；折叠本机单机草稿。未登录跳转 `/login`；纯 admin 跳转 `/admin`。 |
+| `/test-day/[draftId]` | 已认领本队 | 云端协作测试日。进行中权威为 `TestDayDraft`；归档后只读 `TestSession`。 |
 | `/login` | 公开 | 用户名+密码登录 |
 | `/register` | 公开 | 单次入队码注册（pending 认领） |
-| `/setup` | 公开（零 admin 时） | `AUTH_BOOTSTRAP_SECRET` 创建首个管理员 |
+| `/setup` | 公开（零 admin 时） | `AUTH_BOOTSTRAP_SECRET` 创建首个管理员（仅 admin 角色，不建 Player） |
 | `/reset/[token]` | 公开 | 管理员下发的一次性重置链接 |
-| `/admin` | admin | 入队码批次、认领队列、角色授予、停用、重置链接 |
+| `/admin` | admin | 入队码批次、认领队列、直接授予/撤销角色、停用、重置链接。队员申请非必须 |
 | `/team` | captain/coach | 队务提交情况（无分数） |
 | `/assessment` | 已认领 | Readiness 五维 → 四象限；女性周期面板 |
 | `/prehab` | 已认领 | InjuryCase episode |
@@ -22,14 +23,14 @@ Agent 需要路径、模型或存储键时再读本文件。权威仍以代码�
 | `/schedule/import/[eventId]` | captain/coach | iScore 文字层 PDF 解析确认页 |
 | `/cycle` | — | **仅重定向**到 `/assessment` |
 
-导航：`components/Navbar.tsx`。公开路由：`/login`、`/register`、`/setup`、`/reset/*`。业务页 `useRequireAuth` + `getMe()`（httpOnly `softball_sid`）。pending 认领由 `PendingClaimGate` 拦截。教练导航不含 `/feedback`；队长额外 `/team`。全员已认领另有「赛程」。
+导航：`components/Navbar.tsx`。公开路由：`/login`、`/register`、`/setup`、`/reset/*`。业务页 `useRequireAuth` + `getMe()`（httpOnly `softball_sid`）。pending 认领由 `PendingClaimGate` 拦截。纯 admin 导航仅「账号」。教练导航不含 `/feedback`；队长额外 `/team`。全员已认领另有「赛程」。
 
 ## 身份（Account / Player 分离）
 
 | Prisma | 说明 |
 |--------|------|
-| `Account` + `AccountRole` | 登录主体；角色并集鉴权（`lib/auth/policy.ts`） |
-| `MembershipClaim` | pending/approved/rejected；唯一认领状态源 |
+| `Account` + `AccountRole` | 登录主体；角色并集鉴权（`lib/auth/policy.ts`）。`admin` 默认不绑 Player |
+| `MembershipClaim` | pending/approved/rejected；唯一认领状态源。纯 admin 无认领记录 |
 | `EnrollmentCode` | 单次 player 入队码（`codeHash`） |
 | `AuthSession` | httpOnly session；`requireSession` 每次校验 active |
 | `Player` | 名册与成绩；`Player.role` **@deprecated**，迁移中 |
@@ -39,15 +40,16 @@ Agent 需要路径、模型或存储键时再读本文件。权威仍以代码�
 ## 分层与入口
 
 ```
-app/page.tsx（测试清单编排，保持薄）
-  → components/test-day/*  +  hooks/useTestDaySession.ts
-      → useTestDayHits / useTestDayAssignments / useTestDaySkillRecords
-        → lib/sessionDraft.ts、lib/gameArchive.ts、lib/testDay/*
-          → lib/actions.ts（saveTestSession / getPlayers / createRosterPlayer）
-            → lib/auth/requireSession.ts + lib/db.ts → PostgreSQL
+app/page.tsx（测试日大厅：云端场次列表 + 折叠本机草稿）
+  → components/test-day/TestDayLobby.tsx + app/TestDayClient.tsx（本机 :live）
+app/test-day/[draftId]/page.tsx
+  → TestDayClient source=cloud
+      → hooks/useCloudTestDaySession.ts
+        → lib/testDay/draftActions.ts、lib/testDay/collab/*
+          → lib/db.ts → PostgreSQL
 ```
 
-本地草稿：`lib/sessionDraft.ts` 等 repository，页面禁止直接 `localStorage.getItem/setItem`。
+本地草稿：`lib/sessionDraft.ts` 仅单机降级，**不是**多人真相源。云端进行中：`TestDayDraft`。正式成绩：`TestSession`。
 
 评估 / 伤病 / 训后 / 教练 / 周期：
 
@@ -61,7 +63,9 @@ app/assessment|prehab|feedback|coach|profile/page.tsx
 | Prisma | 前端契约 |
 |--------|----------|
 | `Team` + `Player` | `lib/players.ts`；会话 `getMe()` / `lib/useSession.ts` |
-| `TestSession`（`assignments` / `testItems` / `assignmentLog` / `customTests` Json） | `lib/sessionDraft.ts`、`lib/testDay/assignmentLog.ts`、`lib/testDay/customTests.ts` |
+| `TestSession`（`assignments` / `testItems` / `assignmentLog` / `customTests` Json；`sourceDraftId` 可空唯一） | `lib/sessionDraft.ts`、`lib/testDay/assignmentLog.ts`、`lib/testDay/customTests.ts` |
+| `TestDayDraft` + `TestDayDraftMember` | 进行中协作场次；`lib/testDay/draftActions.ts` |
+| `TestDayEntry` + `TestDayConflict` | entityKey 合并与冲突；`lib/testDay/collab/*` |
 | `Hit` | `lib/gameArchive.ts` `HitRecord`（`LD\|FB\|GB\|PU\|MISS`，禁止 `1B/HR/OUT`） |
 | `SpeedRecord` + `SpeedColumn` + `SpeedMark` | `lib/testDay/speedGrid.ts`（表格权威；`SpeedRecord` 给档案 PR 双写上一垒/上二垒） |
 | `FlyCatchAttempt` | `FlyCatchAttempt` |
@@ -69,7 +73,7 @@ app/assessment|prehab|feedback|coach|profile/page.tsx
 | `ThrowPlay` | `6-3传球` / `4-3传球`；失败须 `blame` |
 | `ReadinessCheck` | `lib/readinessHistory.ts`；象限只算 `lib/clinical/preQuadrant.ts`；写入 `lib/status/readinessActions.ts` |
 | `InjuryCase` + `InjuryPainLog` + `InjuryNoteRecord` | 云端 DTO `lib/status/shared.ts`；本地草稿 `lib/injuryCases.ts` |
-| `SessionFeedback` | 云端 `lib/status/feedbackActions.ts`；本地草稿 `lib/sessionFeedback.ts`（`schemaVersion: 2`） |
+| `SessionFeedback` | 云端 `lib/status/feedbackActions.ts`；本地草稿 `lib/sessionFeedback.ts`（`schemaVersion: 3`）；`activityTypes String[]`；无时长；备注仅本人，教练 DTO 不含 `note` |
 | `CycleProfile` + `CycleEvent` | `lib/cycleTypes.ts`、`lib/cycleActions.ts`、`lib/clinical/cycle*.ts`。教练只读已授权 `physiologicalLoadTag` |
 | `Team.timeZone` | IANA，试点默认 `Asia/Shanghai`；赛季自然日与比赛窗口展示用此时区 |
 | `Season` | `lib/season/types.ts`；`planned/active/archived`；`effectiveEndsOn` 用于重叠与报告；每队至多一个 active |
@@ -91,39 +95,43 @@ app/schedule/page.tsx
 
 ## 测试日草稿与归档
 
-`SESSION_DRAFT_SCHEMA_VERSION = 5`（`lib/sessionDraft.ts`）。`GAME_ARCHIVE_SCHEMA_VERSION = 4`（`lib/gameArchive.ts`）。读取走 `migrateGameArchive`。
+`SESSION_DRAFT_SCHEMA_VERSION = 6`（`lib/sessionDraft.ts`）。`GAME_ARCHIVE_SCHEMA_VERSION = 5`。当场草稿键 `` softball_session_draft:${teamId}:${accountId}:live `` **不是**云端 `draftId`，仅单机降级。
 
-默认测试项：T座打击、上垒速度、接高飞、好球判断、6-3传球、4-3传球、投手、一垒。投手/一垒只出现在排阵，不进手风琴（`accordionTestItems`）。
+云端协作：`TestDayDraft.status` = `open | frozen | archived`。`open` 可加入与改结构；`frozen` 停加入与结构、仍可提交成绩；`archived` 拒绝写入。结构 Json：`testItems` / `assignments` / `customTests` / `skillStructure`（测速列、好球列）。
 
-自定义测试三种文字备注：`per_player` / `per_group` / `single`。草稿：`customTestDefs` + 三类 notes；归档写入 `TestSession.customTests` Json。
+entityKey：`hit:{clientEntryId}`、`fly:{clientEntryId}` 追加并集；`speed:{playerId}:{columnId}`、`strike:{columnId}:{judgeId}`、`throw:{testItem}:{throwerId}:{firstBaseId}`、`cnote:{testItem}:{scope}` 同值去重、异值冲突不覆盖。轮询 5s，无 WebSocket。无 open 冲突才 `archiveTestDayDraft` → `TestSession.sourceDraftId`。
 
 | 改什么 | 放哪 |
 |--------|------|
-| `/` 编排 | `app/page.tsx` |
-| 面板 UI | `components/test-day/`（`AssignmentSidebar`、`TeeBallPanel`、`SpeedTestPanel`、`FlyCatchPanel`、`StrikeJudgePanel`、`ThrowMatrixPanel`、`CustomTestPanel`） |
-| 草稿总入口 | `hooks/useTestDaySession.ts` |
-| 打击 / 排阵+自定义备注 / 速度·接高飞·好球·传球 | `hooks/useTestDayHits.ts`、`useTestDayAssignments.ts`、`useTestDaySkillRecords.ts` |
+| `/` 大厅 | `app/page.tsx` + `components/test-day/TestDayLobby.tsx` |
+| 云端场次 | `app/test-day/[draftId]/page.tsx` |
+| 本机盘面 | `app/TestDayClient.tsx` + `hooks/useTestDaySession.ts` |
+| 云端盘面 | `hooks/useCloudTestDaySession.ts` |
+| 面板 UI | `components/test-day/` |
+| 协作 Action | `lib/testDay/draftActions.ts` |
+| entityKey / 合并 / 投影 | `lib/testDay/collab/entityKeys.ts`、`merge.ts`、`projectSnapshot.ts` |
 | 盘面→归档 payload | `buildClientArchivePayload`（`lib/testDay/archiveValidation.ts`） |
 | Prisma create 输入 | `buildTestSessionCreateInput`（`lib/testDay/sessionArchiveWrite.ts`） |
-| 排阵修改记录文案 | `lib/testDay/assignmentLog.ts`（一人多项合并显示；列表默认收起） |
-| 比率（折叠卡，非实时看板） | `lib/testDay/skillRates.ts` + `CollapsedRateCard` |
-| 纯函数回归 | `npm run verify:test-day` |
+| 纯函数回归 | `npm run verify:test-day`、`verify:custom-tests`、`verify:test-day-collab` |
 
 交卷：`buildClientArchivePayload` → `saveTestSession` → `normalizeSessionArchivePayload` → `buildTestSessionCreateInput`。过滤空测速、非法打击结果、无效 `playerId`。仅整项备注、无人勾选时允许空 playerId 列表。成功只认云端，不清盘除非 `success`；失败写回 `session_draft`。归档后 `TestSession` 只读。未归档草稿按记录 `id` 可改可删（`RecordActions`）。
 
 ## localStorage 键（`lib/storageKeys.ts`）
 
+基键如下；业务草稿实际读写为 `` `${base}:${teamId}:${accountId}` ``；测试日当场草稿另加 `:live`（`lib/scopedStorage.ts`）。无后缀全局 key 访问时删除，不迁入当前账号。
+
 | Key | 用途 |
 |-----|------|
 | `softball_currentUser` | 废弃前端 Session；现权威为 `getMe()` / `softball_sid` |
-| `softball_session_draft` | 测试日当场草稿（hits / speedColumns·Marks / 技能表 / assignments / assignmentLog / testItems / customTestDefs+三类 notes）；交卷失败降级；云端 `TestSession` 为正式成绩权威 |
+| `softball_auth_owner` | 当前 Profile 的 `teamId:accountId`（非 cookie）；换账号或跨标签发现身份变更 |
+| `softball_session_draft` | 测试日当场草稿 base。实际读写 `` ${base}:${teamId}:${accountId}:live ``；含 hits / 技能表 / 排阵 / 清单 / 修改记录 / 自定义备注 / currentBatterId / flyCatchNoteDrafts；交卷失败降级；云端 `TestSession` 为正式成绩权威 |
 | `softball_games_history` | 归档本地缓存；云端权威 |
-| `softball_readiness_history` | 评估本地缓存 |
+| `softball_readiness_history` | 评估本地草稿 |
 | `softball_injury_cases` | 损伤草稿；云端权威 |
-| `softball_session_feedback` | 训后 RPE 草稿 |
-| `softball_period_start` | 经期开始日缓存 |
+| `softball_session_feedback` | 训后反馈草稿 |
+| `softball_period_start` | 已停止写入；经期权威为云端 `CycleEvent` |
 | `softball_players` | 废弃名册，禁止当权威 |
-| `softball_hits` | 废弃，迁入 draft 后清除 |
+| `softball_hits` | 废弃，无后缀 key 删除不迁入 |
 | `softball_injury_log` | 废弃 VAS 快照，读取忽略 |
 
 新增键必须同步本表与 `开发原则.md` §2。

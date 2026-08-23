@@ -6,7 +6,10 @@ import {
   type CustomTestSlice,
 } from "@/lib/testDay/customTests";
 
-export const GAME_ARCHIVE_SCHEMA_VERSION = 4;
+import type { AssignmentCommit } from "@/lib/testDay/assignmentLog";
+import { isAssignmentCommit } from "@/lib/testDay/assignmentLog";
+
+export const GAME_ARCHIVE_SCHEMA_VERSION = 5;
 
 export const HIT_RESULT_VALUES = ["LD", "FB", "GB", "PU", "MISS"] as const;
 export type HitResult = (typeof HIT_RESULT_VALUES)[number];
@@ -124,6 +127,9 @@ export interface GameArchive {
   customPlayerNotes: CustomTestSlice["customPlayerNotes"];
   customGroupNotes: CustomTestSlice["customGroupNotes"];
   customSingleNotes: CustomTestSlice["customSingleNotes"];
+  assignments: Record<string, string[]>;
+  testItems: string[];
+  assignmentLog: AssignmentCommit[];
   /** @deprecated 旧版打点字段，读取时由 migrate 归一到 hits */
   data?: HitRecord[];
 }
@@ -308,6 +314,29 @@ function filterTyped<T>(
   return Array.isArray(raw) ? raw.filter(guard) : [];
 }
 
+function parseArchiveAssignments(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const next: Record<string, string[]> = {};
+  for (const [playerId, items] of Object.entries(
+    value as Record<string, unknown>
+  )) {
+    if (!Array.isArray(items)) continue;
+    next[playerId] = items.filter(
+      (item): item is string => typeof item === "string"
+    );
+  }
+  return next;
+}
+
+function parseArchiveTestItems(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function parseArchiveAssignmentLog(value: unknown): AssignmentCommit[] {
+  return Array.isArray(value) ? value.filter(isAssignmentCommit) : [];
+}
+
 // 推导步骤：识别原始对象 → 归一 hits/speed/技能表 → 缺字段当空数组
 export function migrateGameArchive(raw: unknown): GameArchive | null {
   if (!raw || typeof raw !== "object") return null;
@@ -346,6 +375,9 @@ export function migrateGameArchive(raw: unknown): GameArchive | null {
     strikeJudgeCells: filterTyped(obj.strikeJudgeCells, isStrikeJudgeCell),
     throwPlays: filterTyped(obj.throwPlays, isThrowPlay),
     ...parseCustomTestSlice(obj),
+    assignments: parseArchiveAssignments(obj.assignments),
+    testItems: parseArchiveTestItems(obj.testItems),
+    assignmentLog: parseArchiveAssignmentLog(obj.assignmentLog),
   };
 }
 
@@ -383,5 +415,8 @@ export function createGameArchive(
     strikeJudgeCells: skills.strikeJudgeCells,
     throwPlays: skills.throwPlays,
     ...emptyCustomTestSlice(),
+    assignments: {},
+    testItems: [],
+    assignmentLog: [],
   };
 }

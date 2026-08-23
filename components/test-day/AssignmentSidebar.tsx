@@ -29,7 +29,7 @@ interface AssignmentSidebarProps {
   assignmentLog: AssignmentCommit[];
   sidebarMode: SidebarMode;
   onSidebarModeChange: (mode: SidebarMode) => void;
-  onAddPlayer: () => void;
+  onAddPlayer?: () => void;
   onToggleAssignment: (playerId: string, testItem: string) => void;
   onSelectAllTestsForPlayer: (playerId: string) => void;
   onSelectAllPlayersForTest: (testItem: string) => void;
@@ -77,12 +77,14 @@ export default function AssignmentSidebar({
           排阵指挥中心
         </h2>
 
-        <button
-          onClick={onAddPlayer}
-          className="w-full border border-zinc-300 bg-white py-2 text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
-        >
-          + 临时新增队员
-        </button>
+        {onAddPlayer ? (
+          <button
+            onClick={onAddPlayer}
+            className="w-full border border-zinc-300 bg-white py-2 text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
+          >
+            + 临时新增队员
+          </button>
+        ) : null}
 
         <div className="flex border border-zinc-900">
           <button
@@ -281,7 +283,7 @@ export default function AssignmentSidebar({
                         </span>
                       </span>
                       <span
-                        className={`inline-block shrink-0 text-[10px] leading-none text-zinc-500 transition-transform ${
+                        className={`inline-block shrink-0 text-xs leading-none text-zinc-500 transition-transform ${
                           expanded ? "" : "-rotate-90"
                         }`}
                       >

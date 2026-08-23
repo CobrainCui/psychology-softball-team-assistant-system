@@ -17,6 +17,14 @@
 html {
   background-color: #ffffff;
   color-scheme: light only;
+  /* 推导步骤：抬高根字号，text-* / p-* / gap-* / max-w-* 等 rem 容器一并放大 */
+  font-size: 18px;
+}
+
+@media print {
+  html {
+    font-size: 16px;
+  }
 }
 
 body {

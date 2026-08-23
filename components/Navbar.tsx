@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { logout } from "@/lib/auth/authActions";
 import { switchActiveView } from "@/lib/auth/meActions";
+import { clearAuthOwner, dropUnscopedBusinessKeys } from "@/lib/scopedStorage";
 import { useSession } from "@/lib/useSession";
 import type { ActiveView, RoleKind } from "@/lib/auth/types";
 
@@ -72,11 +73,9 @@ export default function Navbar() {
   const router = useRouter();
 
   const navLinks =
-    user && user.claimStatus === "approved"
+    user && user.claimStatus === "approved" && user.playerId
       ? navForView(user.activeView, user.roles)
-      : user
-        ? [{ href: "/", label: "首页" }]
-        : [];
+      : [];
 
   const handleNavClick = (
     e: React.MouseEvent<HTMLAnchorElement>,
@@ -102,7 +101,15 @@ export default function Navbar() {
   );
 
   const handleLogout = async () => {
-    await logout();
+    const res = await logout();
+    if (!res.success) {
+      console.error("云端被拒:", res.error);
+      window.alert(`退出失败：${res.error}`);
+      return;
+    }
+    // 分区草稿明确保留；只清 owner 与无主全局 key（含旧经期缓存）
+    dropUnscopedBusinessKeys();
+    clearAuthOwner();
     window.location.href = "/login";
   };
 

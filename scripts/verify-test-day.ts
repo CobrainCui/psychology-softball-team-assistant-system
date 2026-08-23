@@ -6,6 +6,19 @@ import {
   migrateGameArchive,
   type HitRecord,
 } from "../lib/gameArchive";
+import { sessionToGameArchive } from "../lib/sessionMapper";
+import {
+  createEmptySessionDraft,
+  sessionDraftIsEmpty,
+} from "../lib/sessionDraft";
+import {
+  LIVE_DRAFT_SLOT,
+  resolveLiveDraftMigration,
+  scopedKey,
+  sessionDraftLegacyKey,
+  sessionDraftLiveKey,
+} from "../lib/scopedStorage";
+import { STORAGE_KEYS } from "../lib/storageKeys";
 import {
   buildAssignmentCommitHeadline,
   formatAssignmentPairs,
@@ -161,6 +174,125 @@ assert(
     "折返跑"
   ).customPlayerNotes.length === 0,
   "删除自定义项时清掉对应备注"
+);
+
+const scope = { teamId: "team1", accountId: "acc1" };
+assert(
+  sessionDraftLiveKey(scope) ===
+    `${STORAGE_KEYS.sessionDraft}:team1:acc1:${LIVE_DRAFT_SLOT}`,
+  "当场草稿键带 :live 槽"
+);
+assert(
+  sessionDraftLegacyKey(scope) === `${STORAGE_KEYS.sessionDraft}:team1:acc1`,
+  "旧两段键不含 live"
+);
+assert(
+  scopedKey(STORAGE_KEYS.gamesHistory, scope) ===
+    `${STORAGE_KEYS.gamesHistory}:team1:acc1`,
+  "其它草稿仍用两段分区键"
+);
+
+const promote = resolveLiveDraftMigration(null, '{"hits":[]}');
+assert(
+  promote.writeLive === true &&
+    promote.dropLegacy === true &&
+    promote.value === '{"hits":[]}',
+  "旧两段键升到 :live"
+);
+const keepLive = resolveLiveDraftMigration('{"live":1}', '{"old":1}');
+assert(
+  keepLive.writeLive === false &&
+    keepLive.dropLegacy === true &&
+    keepLive.value === '{"live":1}',
+  "已有 live 时丢弃旧键不认领"
+);
+const emptyMig = resolveLiveDraftMigration(null, null);
+assert(
+  emptyMig.value === null &&
+    emptyMig.writeLive === false &&
+    emptyMig.dropLegacy === false,
+  "无草稿不写盘"
+);
+
+assert(
+  sessionDraftIsEmpty(createEmptySessionDraft()) === true,
+  "空盘面不落草稿"
+);
+assert(
+  sessionDraftIsEmpty({
+    ...createEmptySessionDraft(),
+    currentBatterId: "p1",
+  }) === true,
+  "仅默认打击者不单独落草稿"
+);
+
+const v4 = migrateGameArchive({
+  schemaVersion: 4,
+  gameId: 1,
+  date: "2026-08-21",
+  data: [sampleHit],
+});
+assert(
+  v4 !== null &&
+    v4.hits[0]?.id === "h1" &&
+    Object.keys(v4.assignments).length === 0 &&
+    v4.testItems.length === 0 &&
+    v4.assignmentLog.length === 0,
+  "旧 v4 快照 migrate 后排阵三项为空安全值"
+);
+
+const archivedAt = new Date("2026-08-23T04:00:00.000Z");
+const mapped = sessionToGameArchive({
+  schemaVersion: 5,
+  archivedAt,
+  assignments: { p1: ["T座打击", "接高飞"] },
+  testItems: ["T座打击", "上垒速度", "接高飞"],
+  assignmentLog: [
+    {
+      id: "log1",
+      author: "队长",
+      summary: "队长进行了一次测试报名",
+      added: [{ playerId: "p1", testItem: "接高飞" }],
+      removed: [],
+      timestamp: 1,
+    },
+  ],
+  customTests: null,
+  hits: [
+    {
+      id: "h1",
+      playerId: "p1",
+      result: "LD",
+      x: null,
+      y: null,
+      pitchType: null,
+      hitQuality: null,
+      recordedAt: archivedAt,
+      player: { id: "p1", name: "张三" },
+    },
+  ],
+  speedRecords: [],
+  speedColumns: [],
+  speedMarks: [],
+  flyCatchAttempts: [],
+  strikeJudgeColumns: [],
+  strikeJudgeCells: [],
+  throwPlays: [],
+});
+assert(
+  mapped.assignments.p1?.join(",") === "T座打击,接高飞" &&
+    mapped.testItems.includes("接高飞") &&
+    mapped.testItems.includes("投手") &&
+    mapped.assignmentLog[0]?.id === "log1",
+  "sessionToGameArchive 读回排阵与修改记录"
+);
+
+const roundTrip = migrateGameArchive(mapped);
+assert(
+  roundTrip !== null &&
+    roundTrip.assignments.p1?.includes("接高飞") === true &&
+    roundTrip.assignmentLog[0]?.author === "队长",
+  "归档 mapper → migrate 排阵字段仍在"
 );
 
 if (failed > 0) {

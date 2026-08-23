@@ -2,6 +2,11 @@
 
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { safeParseJSON } from "@/lib/safeParse";
+import {
+  readScopedItem,
+  writeScopedItem,
+  type DraftScope,
+} from "@/lib/scopedStorage";
 import { isPainArea, type PainArea } from "@/lib/clinical/painAreas";
 import {
   isInjuryKind,
@@ -60,8 +65,10 @@ function isCase(value: unknown): value is InjuryCaseDraft {
   );
 }
 
-export function loadInjuryCaseDrafts(): InjuryCaseDraft[] {
-  const raw = localStorage.getItem(STORAGE_KEYS.injuryCases);
+export function loadInjuryCaseDrafts(
+  scope: DraftScope | null
+): InjuryCaseDraft[] {
+  const raw = readScopedItem(STORAGE_KEYS.injuryCases, scope);
   const parsed = safeParseJSON<unknown>(raw, []);
   if (!Array.isArray(parsed)) return [];
   return parsed.filter(isCase).map((c) => ({
@@ -79,18 +86,27 @@ export function loadInjuryCaseDrafts(): InjuryCaseDraft[] {
   }));
 }
 
-export function saveInjuryCaseDrafts(cases: InjuryCaseDraft[]): void {
-  localStorage.setItem(STORAGE_KEYS.injuryCases, JSON.stringify(cases));
+export function saveInjuryCaseDrafts(
+  scope: DraftScope | null,
+  cases: InjuryCaseDraft[]
+): void {
+  writeScopedItem(STORAGE_KEYS.injuryCases, scope, JSON.stringify(cases));
 }
 
-export function upsertInjuryCaseDraft(next: InjuryCaseDraft): InjuryCaseDraft {
-  const existing = loadInjuryCaseDrafts().filter((c) => c.id !== next.id);
-  saveInjuryCaseDrafts([...existing, next]);
+export function upsertInjuryCaseDraft(
+  scope: DraftScope | null,
+  next: InjuryCaseDraft
+): InjuryCaseDraft {
+  const existing = loadInjuryCaseDrafts(scope).filter((c) => c.id !== next.id);
+  saveInjuryCaseDrafts(scope, [...existing, next]);
   return next;
 }
 
-export function loadPlayerInjuryCaseDrafts(playerId: string): InjuryCaseDraft[] {
-  return loadInjuryCaseDrafts()
+export function loadPlayerInjuryCaseDrafts(
+  scope: DraftScope | null,
+  playerId: string
+): InjuryCaseDraft[] {
+  return loadInjuryCaseDrafts(scope)
     .filter((c) => c.playerId === playerId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
