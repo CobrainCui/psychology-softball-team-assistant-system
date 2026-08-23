@@ -23,6 +23,16 @@ import {
 } from "@/lib/testDay/customTests";
 import { speedRecordsFromGrid } from "@/lib/testDay/speedGrid";
 
+/** 正式 TestSession 只允许从云端协作草稿 archiveTestDayDraft 创建 */
+export const CLOUD_DRAFT_ARCHIVE_ONLY_ERROR =
+  "请从云端协作场次归档正式成绩";
+
+/** 结构 PATCH 乐观版本不匹配：请刷新后再改，不创建 structure 冲突行 */
+export const STRUCTURE_STALE_VERSION_ERROR =
+  "排阵或测试项已被他人更新，请刷新后再改";
+
+export const STRUCTURE_VERSION_REQUIRED_ERROR = "结构更新须带 expectedVersion";
+
 export type SessionArchivePayload = {
   hits: HitRecord[];
   speedRecords: SpeedRecord[];
@@ -141,7 +151,7 @@ export function collectSessionArchivePlayerIds(
 
 const HIT_RESULT_SET: ReadonlySet<string> = new Set(HIT_RESULT_VALUES);
 
-// 推导步骤：前端盘面 → 过滤非法打点/秒数 → 派生 speedRecords → 交给 saveTestSession
+// 推导步骤：前端盘面 → 过滤非法打点/秒数 → 派生 speedRecords → 交给 archiveTestDayDraft
 export function buildClientArchivePayload(input: {
   hits: HitRecord[];
   speedColumns: SpeedColumn[];

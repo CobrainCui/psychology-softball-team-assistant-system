@@ -54,6 +54,8 @@ export function buildCycleAssessmentBundle(input: {
   sorenessScore: number;
   recentSleep: number[];
   recentFatigue: number[];
+  /** 队时区自然日，缺省则 UTC 日历日 */
+  asOfDateStr?: string;
 }): CycleAssessmentBundle {
   const empty: CycleAssessmentBundle = {
     phase: null,
@@ -79,12 +81,15 @@ export function buildCycleAssessmentBundle(input: {
           cycleLengthDays: profile.resolvedLengthDays,
           confidence: profile.confidence,
           hidePhaseLabels,
+          asOfDateStr: input.asOfDateStr,
         })
       : null;
 
   const missed = estimateMissedExpectedPeriods(
     periodStartDate || profile.lastPeriodStart,
-    profile.resolvedLengthDays
+    profile.resolvedLengthDays,
+    new Date(),
+    input.asOfDateStr
   );
   const fatigueWorse = scale5ToWorse10(input.fatigueScore);
   const sorenessWorse = scale5ToWorse10(input.sorenessScore);

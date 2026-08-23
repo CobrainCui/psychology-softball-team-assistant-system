@@ -12,6 +12,10 @@ import {
 import { canManageSchedule } from "@/lib/auth/policy";
 import { canUploadToEvent } from "@/lib/season/invariants";
 import {
+  pendingFileEventUploadError,
+  pendingFileWriterError,
+} from "@/lib/season/fileUploadEligibility";
+import {
   deleteSeasonObject,
   headSeasonObject,
   PDF_MAX_BYTES,
@@ -118,9 +122,13 @@ export async function storePendingBytes(
       where: { id: fileId, teamId: gate.ctx.teamId, status: "pending" },
     });
     if (!file) return { success: false, error: "上传记录无效" };
-    if (file.uploadedById !== gate.ctx.accountId && !canManageSchedule(gate.ctx)) {
-      return { success: false, error: "只能上传自己的文件" };
-    }
+    const writerErr = pendingFileWriterError(gate.ctx, file.uploadedById, "store");
+    if (writerErr) return { success: false, error: writerErr };
+    const eventErr = await pendingFileEventUploadError(
+      gate.ctx.teamId,
+      file.scheduleEventId
+    );
+    if (eventErr) return { success: false, error: eventErr };
     if (bytes.length > PDF_MAX_BYTES) {
       return { success: false, error: "文件超过 20MB" };
     }
@@ -142,6 +150,17 @@ export async function finalizeUpload(
       where: { id: fileId, teamId: gate.ctx.teamId },
     });
     if (!file) return { success: false, error: "上传记录无效" };
+    const writerErr = pendingFileWriterError(
+      gate.ctx,
+      file.uploadedById,
+      "finalize"
+    );
+    if (writerErr) return { success: false, error: writerErr };
+    const eventErr = await pendingFileEventUploadError(
+      gate.ctx.teamId,
+      file.scheduleEventId
+    );
+    if (eventErr) return { success: false, error: eventErr };
     const head = await headSeasonObject(file.storageKey);
     if (!head) return { success: false, error: "尚未收到文件内容" };
     const moved = await prisma.gameRecordFile.updateMany({

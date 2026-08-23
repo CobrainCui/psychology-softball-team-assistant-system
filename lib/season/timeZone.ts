@@ -1,4 +1,4 @@
-import { parseDateOnly } from "@/lib/dateOnly";
+import { addCalendarDays, parseDateOnly } from "@/lib/dateOnly";
 
 const DEFAULT_TZ = "Asia/Shanghai";
 
@@ -19,7 +19,10 @@ export function resolveTeamTimeZone(tz: string | null | undefined): string {
 }
 
 /** 队时区自然日 YYYY-MM-DD */
-export function zonedDateStr(instant: Date, timeZone: string): string {
+export function zonedDateStr(
+  instant: Date,
+  timeZone: string | null | undefined
+): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: resolveTeamTimeZone(timeZone),
     year: "numeric",
@@ -35,6 +38,32 @@ export function zonedDateStr(instant: Date, timeZone: string): string {
 
 export function dateOnlyFromZoned(instant: Date, timeZone: string): Date {
   return parseDateOnly(zonedDateStr(instant, timeZone));
+}
+
+/** 队时区自然日；健康 / 反馈 / 伤病 / 教练摘要的“今日”只走这里 */
+export function getTeamTodayDateStr(
+  timeZone: string | null | undefined,
+  instant: Date = new Date()
+): string {
+  return zonedDateStr(instant, timeZone);
+}
+
+export function isTeamTodayDateOnly(
+  dateStr: string,
+  timeZone: string | null | undefined,
+  instant: Date = new Date()
+): boolean {
+  return dateStr === getTeamTodayDateStr(timeZone, instant);
+}
+
+/** 测试日可在队时区当日归档，或次日补归档（跨午夜晚场） */
+export function isWithinTestDayArchiveWindow(
+  draftDate: string,
+  timeZone: string | null | undefined,
+  instant: Date = new Date()
+): boolean {
+  const today = getTeamTodayDateStr(timeZone, instant);
+  return draftDate === today || draftDate === addCalendarDays(today, -1);
 }
 
 export function minDateStr(a: string, b: string): string {

@@ -9,6 +9,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "verify:test-day-collab": "npx --yes tsx scripts/verify-test-day-collab.ts",
+    "verify:test-day-collab-actions": "npx --yes tsx scripts/verify-test-day-collab-actions.ts",
+    "verify:test-day": "npx --yes tsx scripts/verify-test-day.ts",
     "verify:custom-tests": "npx --yes tsx scripts/verify-custom-tests.ts",
     "verify:clinical": "npx --yes tsx scripts/verify-clinical.ts",
     "verify:auth": "npx --yes tsx scripts/verify-auth.ts",

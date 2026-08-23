@@ -73,6 +73,8 @@ export function buildTestSessionCreateInput(
     };
   });
 
+  // 盘面列 id（firstBase 等）全库会重复；落库主键另发，boardColumnId 保留盘面 id
+  const boardToPersistId = new Map<string, string>();
   const speedColumnCreates = data.speedColumns.map((column, index) => {
     if (typeof column.id !== "string" || !column.id) {
       throw new Error(`第 ${index + 1} 列跑垒缺少 id`);
@@ -80,8 +82,11 @@ export function buildTestSessionCreateInput(
     if (typeof column.name !== "string" || !column.name.trim()) {
       throw new Error(`第 ${index + 1} 列跑垒缺少名称`);
     }
+    const persistId = crypto.randomUUID();
+    boardToPersistId.set(column.id, persistId);
     return {
-      id: column.id,
+      id: persistId,
+      boardColumnId: column.id,
       name: column.name.trim(),
       sortOrder:
         typeof column.sortOrder === "number" ? column.sortOrder : index,
@@ -91,18 +96,22 @@ export function buildTestSessionCreateInput(
 
   const speedMarkCreates = data.speedMarks.map((mark, index) => {
     const seconds = toFloatOrNull(mark.seconds);
+    const persistColumnId = mark.columnId
+      ? boardToPersistId.get(mark.columnId)
+      : undefined;
     if (
       typeof mark.playerId !== "string" ||
       !mark.playerId ||
       typeof mark.columnId !== "string" ||
       !mark.columnId ||
+      persistColumnId === undefined ||
       seconds === null ||
       seconds < 0
     ) {
       throw new Error(`第 ${index + 1} 条跑垒秒数无效`);
     }
     return {
-      columnId: mark.columnId,
+      columnId: persistColumnId,
       playerId: mark.playerId,
       seconds,
       recordedAt: archivedAt,

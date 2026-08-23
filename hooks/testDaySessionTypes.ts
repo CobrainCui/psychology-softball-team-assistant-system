@@ -4,3 +4,8 @@ export interface PendingHit {
 }
 
 export type SidebarMode = "byPlayer" | "byTest";
+
+export type NewRosterPlayerInput = {
+  name: string;
+  gender: "male" | "female";
+};

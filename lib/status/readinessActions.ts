@@ -1,7 +1,10 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import type { ReadinessHistoryEntry } from "@/lib/readinessHistory";
+import {
+  READINESS_DRAFT_SCHEMA_VERSION,
+  type ReadinessHistoryEntry,
+} from "@/lib/readinessHistory";
 import {
   PRE_RULE_VERSION,
   buildPreFeedback,
@@ -13,12 +16,11 @@ import type { ActionResult } from "@/lib/actionResult";
 import type { CycleConfidence, CyclePhaseCode } from "@/lib/clinical/cyclePhase";
 import type { PhysiologicalLoadTag } from "@/lib/clinical/physiologicalLoad";
 import type { CycleEnergyLevel, CycleMoodLevel } from "@/lib/cycleTypes";
+import { buildCycleAssessmentBundle } from "@/lib/clinical/buildCycleAssessment";
+import { loadCycleProfileDto } from "@/lib/cycleProfileLoad";
 import {
-  asCycleConfidence,
   asCycleEnergy,
   asCycleMood,
-  asCyclePhaseCode,
-  asLoadTag,
   clampScore0to10,
   errorMessage,
   rejectIfNotToday,
@@ -53,7 +55,7 @@ export async function saveReadinessAssessment(
     if (!gate.success) return gate;
     const playerId = gate.playerId;
 
-    const dayErr = rejectIfNotToday(payload.date);
+    const dayErr = rejectIfNotToday(payload.date, gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     const sleep = clampScale5(payload.sleep);
     const stress = clampScale5(payload.stress);
@@ -76,6 +78,35 @@ export async function saveReadinessAssessment(
     if (!player) return { success: false, error: "云端无此队员" };
 
     const date = parseDateOnly(payload.date);
+    const crampsScore = clampScore0to10(payload.crampsScore ?? undefined);
+    const cycleEnergy = asCycleEnergy(payload.cycleEnergy);
+    const cycleMood = asCycleMood(payload.cycleMood);
+    const cycleIrregularFlag = Boolean(payload.cycleIrregularFlag);
+
+    // 推导步骤：阶段/负荷按队时区日 + CycleProfile 重算，不信任客户端标签
+    const profile = await loadCycleProfileDto(player.id);
+    const recent = await prisma.readinessCheck.findMany({
+      where: { playerId: player.id },
+      orderBy: { date: "desc" },
+      take: 30,
+      select: { sleep: true, fatigue: true },
+    });
+    const cycleBundle = buildCycleAssessmentBundle({
+      profile,
+      periodStartDate: profile?.lastPeriodStart ?? "",
+      symptoms: {
+        crampsScore: crampsScore ?? 0,
+        cycleEnergy,
+        cycleMood,
+        cycleIrregular: cycleIrregularFlag,
+      },
+      fatigueScore: fatigue,
+      sorenessScore: soreness,
+      recentSleep: recent.map((row) => row.sleep),
+      recentFatigue: recent.map((row) => row.fatigue),
+      asOfDateStr: payload.date,
+    });
+
     const data = {
       sleep,
       stress,
@@ -86,17 +117,16 @@ export async function saveReadinessAssessment(
       mentalDrive: feedback.mentalDrive,
       quadrant: feedback.quadrant,
       ruleVersion: PRE_RULE_VERSION,
-      cycleDay:
-        typeof payload.cycleDay === "number" && Number.isFinite(payload.cycleDay)
-          ? Math.round(payload.cycleDay)
-          : null,
-      cyclePhaseCode: asCyclePhaseCode(payload.cyclePhaseCode),
-      cycleConfidence: asCycleConfidence(payload.cycleConfidence),
-      physiologicalLoadTag: asLoadTag(payload.physiologicalLoadTag),
-      crampsScore: clampScore0to10(payload.crampsScore ?? undefined),
-      cycleEnergy: asCycleEnergy(payload.cycleEnergy),
-      cycleMood: asCycleMood(payload.cycleMood),
-      cycleIrregularFlag: Boolean(payload.cycleIrregularFlag),
+      cycleDay: cycleBundle.phase?.dayOfCycle ?? null,
+      cyclePhaseCode: cycleBundle.phase?.hidePhaseLabels
+        ? null
+        : (cycleBundle.phase?.code ?? null),
+      cycleConfidence: cycleBundle.phase?.confidence ?? null,
+      physiologicalLoadTag: cycleBundle.loadTag,
+      crampsScore,
+      cycleEnergy,
+      cycleMood,
+      cycleIrregularFlag,
     };
 
     await prisma.readinessCheck.upsert({
@@ -122,7 +152,7 @@ export async function deleteReadinessAssessment(payload: {
     const gate = await requireOwnDataWriter();
     if (!gate.success) return gate;
 
-    const dayErr = rejectIfNotToday(payload.date);
+    const dayErr = rejectIfNotToday(payload.date, gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
 
     const existing = await prisma.readinessCheck.findUnique({
@@ -165,6 +195,15 @@ export async function getReadinessHistory(): Promise<
       physicalBattery: row.physicalBattery,
       mentalDrive: row.mentalDrive,
       quadrant: row.quadrant,
+      schemaVersion: READINESS_DRAFT_SCHEMA_VERSION,
+      cycleDay: row.cycleDay,
+      cyclePhaseCode: row.cyclePhaseCode,
+      cycleConfidence: row.cycleConfidence,
+      physiologicalLoadTag: row.physiologicalLoadTag,
+      crampsScore: row.crampsScore,
+      cycleEnergy: row.cycleEnergy,
+      cycleMood: row.cycleMood,
+      cycleIrregularFlag: row.cycleIrregularFlag,
     }));
     return { success: true, history };
   } catch (error) {

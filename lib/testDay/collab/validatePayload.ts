@@ -9,6 +9,7 @@ import {
   isCustomGroupNote,
   isCustomPlayerNote,
   isCustomSingleNote,
+  groupNoteClientEntryId,
 } from "@/lib/testDay/customTests";
 import { entityKeyForKind } from "@/lib/testDay/collab/entityKeys";
 import type { TestDayEntryKind } from "@/lib/testDay/collab/types";
@@ -78,13 +79,15 @@ export function validateEntryPayload(
     }
     case "custom_group_note": {
       if (!isCustomGroupNote(payload)) return { ok: false, error: "分组备注无效" };
+      // 推导步骤：payload.id 是分组身份（entityKey）；revisionId 才是 clientEntryId，避免二次编辑撞唯一约束
+      const clientEntryId = groupNoteClientEntryId(payload);
       const entityKey = entityKeyForKind(kind, {
-        clientEntryId: payload.id,
+        clientEntryId,
         testItem: payload.testItem,
         noteScope: payload.id,
       });
       if (!entityKey) return { ok: false, error: "entityKey 无效" };
-      return { ok: true, entityKey, clientEntryId: payload.id };
+      return { ok: true, entityKey, clientEntryId };
     }
     case "custom_single_note": {
       if (!isCustomSingleNote(payload)) {

@@ -1,6 +1,11 @@
 import { formatDateOnly } from "@/lib/dateOnly";
+import {
+  archiveDevicesReady,
+  isDeviceArchiveReady,
+} from "@/lib/testDay/collab/archiveReady";
 import { parseCandidateIds } from "@/lib/testDay/collab/merge";
 import {
+  emptyDraftBoardSnapshot,
   projectDraftSnapshot,
   toPublicConflicts,
   type DraftBoardSnapshot,
@@ -26,6 +31,14 @@ export type TestDayDraftListItem = {
   isMember: boolean;
 };
 
+export type TestDayDeviceGate = {
+  deviceId: string;
+  accountId: string;
+  label: string;
+  archiveReady: boolean;
+  isSelf: boolean;
+};
+
 export type TestDayDraftDto = {
   id: string;
   date: string;
@@ -37,6 +50,10 @@ export type TestDayDraftDto = {
   snapshot: DraftBoardSnapshot;
   conflicts: PublicConflict[];
   openConflictCount: number;
+  archivedSessionId: string | null;
+  deviceGates: TestDayDeviceGate[];
+  allDevicesArchiveReady: boolean;
+  selfDeviceReady: boolean;
 };
 
 type DraftRow = {
@@ -94,6 +111,54 @@ export function toStoredConflict(row: ConflictRow): CollabStoredConflict {
   };
 }
 
+type MemberRow = {
+  accountId: string;
+};
+
+export type DeviceGateRow = {
+  deviceId: string;
+  accountId: string;
+  archiveReadyAt: Date | null;
+  pendingOutboxCount: number;
+  failedOutboxCount: number;
+  account: { username: string };
+};
+
+export function toDeviceGates(
+  devices: DeviceGateRow[],
+  viewerDeviceId: string | null
+): TestDayDeviceGate[] {
+  return devices.map((row) => ({
+    deviceId: row.deviceId,
+    accountId: row.accountId,
+    label: `${row.account.username} · ${row.deviceId.slice(-4)}`,
+    archiveReady: isDeviceArchiveReady(row),
+    isSelf: Boolean(viewerDeviceId) && row.deviceId === viewerDeviceId,
+  }));
+}
+
+export function buildArchiveGateFields(input: {
+  members: MemberRow[];
+  devices: DeviceGateRow[];
+  viewerDeviceId: string | null;
+}): {
+  deviceGates: TestDayDeviceGate[];
+  allDevicesArchiveReady: boolean;
+  selfDeviceReady: boolean;
+} {
+  const deviceGates = toDeviceGates(input.devices, input.viewerDeviceId);
+  return {
+    deviceGates,
+    allDevicesArchiveReady: archiveDevicesReady({
+      members: input.members,
+      devices: input.devices,
+    }),
+    selfDeviceReady: deviceGates.some(
+      (row) => row.isSelf && row.archiveReady
+    ),
+  };
+}
+
 export function buildDraftDto(input: {
   draft: DraftRow;
   entries: EntryRow[];
@@ -101,6 +166,10 @@ export function buildDraftDto(input: {
   accountId: string;
   canMutateStructure: boolean;
   isMember: boolean;
+  archivedSessionId?: string | null;
+  members?: MemberRow[];
+  devices?: DeviceGateRow[];
+  viewerDeviceId?: string | null;
 }): TestDayDraftDto {
   const entries = input.entries.map(toStoredEntry);
   const conflicts = input.conflicts.map(toStoredConflict);
@@ -114,6 +183,11 @@ export function buildDraftDto(input: {
     conflicts,
   });
   const publicConflicts = toPublicConflicts(conflicts, entries);
+  const gates = buildArchiveGateFields({
+    members: input.members ?? [],
+    devices: input.devices ?? [],
+    viewerDeviceId: input.viewerDeviceId ?? null,
+  });
   return {
     id: input.draft.id,
     date: formatDateOnly(input.draft.date),
@@ -127,5 +201,33 @@ export function buildDraftDto(input: {
     openConflictCount: publicConflicts.filter(
       (row) => row.reviewStatus === "open"
     ).length,
+    archivedSessionId: input.archivedSessionId ?? null,
+    ...gates,
+  };
+}
+
+/** 未加入成员只看到场次元数据，不含成绩/排阵/冲突 */
+export function buildGuestDraftDto(input: {
+  draft: Pick<
+    DraftRow,
+    "id" | "date" | "status" | "version" | "createdByAccountId"
+  >;
+  archivedSessionId?: string | null;
+}): TestDayDraftDto {
+  return {
+    id: input.draft.id,
+    date: formatDateOnly(input.draft.date),
+    status: input.draft.status,
+    version: input.draft.version,
+    createdByAccountId: input.draft.createdByAccountId,
+    canMutateStructure: false,
+    isMember: false,
+    snapshot: emptyDraftBoardSnapshot(),
+    conflicts: [],
+    openConflictCount: 0,
+    archivedSessionId: input.archivedSessionId ?? null,
+    deviceGates: [],
+    allDevicesArchiveReady: false,
+    selfDeviceReady: false,
   };
 }

@@ -18,6 +18,16 @@ import {
   resolveQuadrant,
 } from "../lib/clinical/preQuadrant";
 import type { Scale5 } from "../lib/clinical/preDimensions";
+import {
+  getCyclePhase,
+} from "../lib/clinical/cyclePhase";
+import { estimateMissedExpectedPeriods } from "../lib/clinical/redsWatch";
+import {
+  READINESS_DRAFT_SCHEMA_VERSION,
+  parseReadinessHistoryEntry,
+  toReadinessCloudSaveInput,
+  type ReadinessHistoryEntry,
+} from "../lib/readinessHistory";
 
 let failed = 0;
 
@@ -117,6 +127,71 @@ assert(
   FATIGUE_SCALE_TICKS.length === 10 &&
     FATIGUE_SCALE_TICKS.every((t) => t.label.length > 0),
   "疲劳 1–10 均有文案"
+);
+
+const v1Readiness = {
+  playerId: "p1",
+  date: "2026-08-23",
+  sleep: 3,
+  stress: 3,
+  fatigue: 3,
+  soreness: 3,
+  willingness: 3,
+  physicalBattery: 50,
+  mentalDrive: 50,
+  quadrant: "peak",
+} satisfies Omit<ReadinessHistoryEntry, "schemaVersion">;
+
+assert(parseReadinessHistoryEntry(v1Readiness) != null, "v1 评估稿仍可解析");
+const v1Save = toReadinessCloudSaveInput(parseReadinessHistoryEntry(v1Readiness)!);
+assert(
+  v1Save.cycleDay === null && v1Save.cycleIrregularFlag === false,
+  "v1 评估稿缺周期字段时回传 null / false"
+);
+
+const v2Raw = {
+  ...v1Readiness,
+  schemaVersion: READINESS_DRAFT_SCHEMA_VERSION,
+  cycleDay: 3,
+  cyclePhaseCode: "follicular",
+  cycleConfidence: "medium",
+  physiologicalLoadTag: "maintain",
+  crampsScore: 2,
+  cycleEnergy: "mid",
+  cycleMood: "steady",
+  cycleIrregularFlag: true,
+};
+const v2Save = toReadinessCloudSaveInput(parseReadinessHistoryEntry(v2Raw)!);
+assert(
+  v2Save.cycleDay === 3 &&
+    v2Save.physiologicalLoadTag === "maintain" &&
+    v2Save.cycleIrregularFlag === true &&
+    v2Save.cyclePhaseCode === "follicular",
+  "v2 评估稿离线回传周期与负荷字段"
+);
+
+const phaseDay = getCyclePhase("2026-01-01", new Date("2020-01-01T00:00:00.000Z"), {
+  asOfDateStr: "2026-01-05",
+  cycleLengthDays: 28,
+});
+assert(phaseDay.dayOfCycle === 5, "周期阶段按 asOfDateStr 而非设备本地日");
+assert(
+  estimateMissedExpectedPeriods("2026-01-01", 28, new Date(), "2026-01-10") === 0,
+  "末次经期未超过一周期+7天不算错过"
+);
+assert(
+  estimateMissedExpectedPeriods("2026-01-01", 28, new Date(), "2026-03-15") >= 2,
+  "队时区日可估算错过预期经期"
+);
+const failedDraft = parseReadinessHistoryEntry({
+  ...v1Readiness,
+  syncStatus: "failed",
+  failedReason: "仅可修改或删除当日记录",
+});
+assert(
+  failedDraft?.syncStatus === "failed" &&
+    failedDraft.failedReason === "仅可修改或删除当日记录",
+  "评估失败匣字段可解析"
 );
 
 if (failed > 0) {

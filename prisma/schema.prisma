@@ -117,6 +117,7 @@ enum TestDayEntryStatus {
 
 enum TestDayConflictType {
   value_mismatch
+  /// 历史预留；结构并发用 TestDayDraft.version + 行锁，不创建此类冲突
   structure
   delete_request
 }
@@ -370,6 +371,7 @@ model TestDayDraft {
   team      Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
   createdBy Account              @relation("TestDayDraftCreator", fields: [createdByAccountId], references: [id], onDelete: Restrict)
   members   TestDayDraftMember[]
+  devices   TestDayDraftDevice[]
   entries   TestDayEntry[]
   conflicts TestDayConflict[]
   session   TestSession?
@@ -379,15 +381,42 @@ model TestDayDraft {
 }
 
 model TestDayDraftMember {
-  id        String   @id @default(cuid())
-  draftId   String
-  accountId String
-  joinedAt  DateTime @default(now())
+  id                 String    @id @default(cuid())
+  draftId            String
+  accountId          String
+  joinedAt           DateTime  @default(now())
+  /// 该账号最近一次上报的本机待同步条数（跨设备看不见真实 outbox）
+  pendingOutboxCount Int       @default(0)
+  pendingReportedAt  DateTime?
+  /// 本机 pending=0 后的显式确认；有待同步时必须清空
+  archiveReadyAt     DateTime?
 
   draft   TestDayDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
   account Account      @relation("TestDayDraftMembership", fields: [accountId], references: [id], onDelete: Cascade)
 
   @@unique([draftId, accountId])
+  @@index([accountId])
+}
+
+/// 每台打开过协作盘面的浏览器；归档按设备确认，确认后该设备禁写
+model TestDayDraftDevice {
+  id             String    @id @default(cuid())
+  draftId        String
+  accountId      String
+  deviceId       String
+  lastSeenAt     DateTime  @default(now())
+  archiveReadyAt DateTime?
+  /// 该设备最近一次上报的本机 pending/failed；确认事务内复核
+  pendingOutboxCount Int       @default(0)
+  failedOutboxCount  Int       @default(0)
+  outboxReportedAt   DateTime?
+  createdAt      DateTime  @default(now())
+
+  draft   TestDayDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  account Account      @relation("TestDayDraftDevice", fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, deviceId])
+  @@index([draftId, accountId])
   @@index([accountId])
 }
 
@@ -411,6 +440,7 @@ model TestDayEntry {
   @@index([draftId, status])
 }
 
+/// open 行唯一性由部分索引 TestDayConflict_open_draft_entity_type_key 保证（Prisma 无法表达 WHERE）
 model TestDayConflict {
   id                  String                      @id @default(cuid())
   draftId             String
@@ -467,15 +497,18 @@ model SpeedRecord {
 }
 
 model SpeedColumn {
-  id         String   @id
-  sessionId  String
-  name       String
-  sortOrder  Int
-  recordedAt DateTime
+  id            String   @id @default(cuid())
+  sessionId     String
+  /// 盘面列 id（firstBase / secondBase / 自定义 uuid）；每场会话内唯一，全库可重复
+  boardColumnId String
+  name          String
+  sortOrder     Int
+  recordedAt    DateTime
 
   session TestSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   marks   SpeedMark[]
 
+  @@unique([sessionId, boardColumnId])
   @@index([sessionId])
 }
 
@@ -706,11 +739,14 @@ model SessionFeedback {
   /// 新写入等于 sessionRpe；界面不再展示负荷
   sessionLoad   Int
   note          String?
+  /// 本机草稿 id；同队员重复提交 upsert，避免弱网重试双计
+  clientDraftId String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
+  @@unique([playerId, clientDraftId])
   @@index([playerId, date])
 }
 
@@ -751,6 +787,7 @@ model Account {
   gameSummariesConfirmed  ConfirmedGameSummary[]  @relation("GameSummaryConfirmer")
   testDayDraftsCreated    TestDayDraft[]          @relation("TestDayDraftCreator")
   testDayDraftMemberships TestDayDraftMember[]    @relation("TestDayDraftMembership")
+  testDayDraftDevices     TestDayDraftDevice[]    @relation("TestDayDraftDevice")
   testDayEntriesAuthored  TestDayEntry[]          @relation("TestDayEntryAuthor")
   testDayConflictsResolved TestDayConflict[]      @relation("TestDayConflictResolver")
 

@@ -12,12 +12,8 @@ import {
 import { getPlayerProfileData } from "@/lib/status/profileActions";
 import { requestRoleChange } from "@/lib/auth/roleActions";
 import { updatePlayer } from "@/lib/playersApi";
-import { loadPlayerReadinessHistory } from "@/lib/readinessHistory";
-import { loadPlayerInjuryCaseDrafts } from "@/lib/injuryCases";
-import { draftScopeFromUser } from "@/lib/scopedStorage";
-import { PAIN_AREA_LABEL } from "@/lib/clinical/painAreas";
-import { quadrantLabel } from "@/lib/clinical/preQuadrant";
 import SoftballFieldSvg from "@/components/test-day/SoftballFieldSvg";
+import RetryNotice from "@/components/test-day/RetryNotice";
 import type { ProfileInjuryBrief, ProfileLatestStatus } from "@/lib/status/profileActions";
 import type { BodyInsight30dReport } from "@/lib/clinical/bodyInsight30d";
 import SeasonReportCard from "@/components/season/SeasonReportCard";
@@ -95,6 +91,8 @@ export default function ProfilePage() {
   const [insight, setInsight] = useState<BodyInsight30dReport | null>(null);
   const [showInsight, setShowInsight] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
@@ -102,37 +100,8 @@ export default function ProfilePage() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setDisplayName(currentUser.playerName ?? currentUser.username);
-      const scope = draftScopeFromUser(currentUser);
-      const readiness = loadPlayerReadinessHistory(
-        scope,
-        currentUser.playerId!
-      );
-      if (readiness[0]) {
-        setLatestStatus({
-          date: readiness[0].date,
-          quadrant: readiness[0].quadrant,
-          quadrantLabel: quadrantLabel(readiness[0].quadrant),
-          physicalBattery: readiness[0].physicalBattery,
-          mentalDrive: readiness[0].mentalDrive,
-        });
-      }
-      const drafts = loadPlayerInjuryCaseDrafts(
-        scope,
-        currentUser.playerId!
-      );
-      if (drafts.length > 0) {
-        setInjuryCases(
-          drafts.slice(0, 8).map((c) => ({
-            id: c.id,
-            painAreaLabel: PAIN_AREA_LABEL[c.painArea],
-            status: c.status,
-            latestPain: c.painLogs.at(-1)?.painScore ?? null,
-            trendLabel: "",
-            startDate: c.startDate,
-          }))
-        );
-      }
       setIsLoading(true);
+      setLoadError(null);
       void (async () => {
         const res = await getPlayerProfileData();
         if (cancelled) return;
@@ -141,6 +110,10 @@ export default function ProfilePage() {
           setHits([]);
           setSpeedRecords([]);
           setSessionCount(0);
+          setInjuryCases([]);
+          setLatestStatus(null);
+          setInsight(null);
+          setLoadError(res.error);
         } else {
           setHits(res.hits);
           setSpeedRecords(res.speedRecords);
@@ -148,6 +121,7 @@ export default function ProfilePage() {
           setInjuryCases(res.injuryCases);
           setLatestStatus(res.latestStatus);
           setInsight(res.insight);
+          setLoadError(null);
         }
         setIsLoading(false);
       })();
@@ -156,7 +130,7 @@ export default function ProfilePage() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [isMounted, currentUser?.accountId, currentUser?.playerId, currentUser]);
+  }, [isMounted, currentUser?.accountId, currentUser?.playerId, currentUser, reloadToken]);
 
   if (!isMounted || !currentUser) return <PageLoading />;
 
@@ -166,6 +140,25 @@ export default function ProfilePage() {
         <p className="text-sm text-zinc-500">
           正在从云端雷达拉取生涯数据...
         </p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-1 items-center justify-center bg-zinc-50 p-6">
+        <main className="flex w-full max-w-2xl flex-col gap-4">
+          <div className="text-center">
+            <h1 className="text-sm font-medium tracking-wide text-zinc-500">
+              个人档案
+            </h1>
+          </div>
+          <RetryNotice
+            message={loadError}
+            busy={isLoading}
+            onRetry={() => setReloadToken((n) => n + 1)}
+          />
+        </main>
       </div>
     );
   }
@@ -344,9 +337,9 @@ export default function ProfilePage() {
             >
               上垒速度：{speedPrLabel}
             </li>
-            <li className="text-gray-400">接高飞：待录入</li>
-            <li className="text-gray-400">好球判断：待录入</li>
-            <li className="text-gray-400">6-3传球：待录入</li>
+            <li className="text-gray-400">
+              接高飞 / 好球判断 / 传球：见大厅归档场次详情，尚未纳入个人 PR
+            </li>
           </ul>
         </div>
 

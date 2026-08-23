@@ -23,8 +23,15 @@ import {
   normalizeEnrollmentCodeInput,
 } from "../lib/auth/tokens";
 import { saveReadinessAssessment } from "../lib/status/readinessActions";
-import { saveSessionFeedback } from "../lib/status/feedbackActions";
-import { getCycleProfile } from "../lib/cycleActions";
+import {
+  getSessionFeedbacks,
+  saveSessionFeedback,
+} from "../lib/status/feedbackActions";
+import {
+  consentToCycleTracking,
+  getCycleProfile,
+  recordPeriodStart,
+} from "../lib/cycleActions";
 import { getInjuryCases } from "../lib/status/injuryActions";
 import {
   getCoachDaySummary,
@@ -49,7 +56,14 @@ import {
 import { GET as getPlayersApi, POST as postPlayersApi } from "../app/api/players/route";
 import { PATCH as patchPlayerApi } from "../app/api/players/[id]/route";
 import { GET as getSessionsApi, POST as postSessionsApi } from "../app/api/sessions/route";
-import { getTodayDateStr } from "../lib/dateOnly";
+import { getTeamTodayDateStr } from "../lib/season/timeZone";
+import { DEFAULT_TEST_ITEMS } from "../lib/sessionDraft";
+import {
+  createTestDayDraft,
+  getTestDayDraft,
+  updateTestDayDraftStructure,
+} from "../lib/testDay/draftActions";
+import { findForbiddenCoachDtoKey } from "../lib/auth/coachDtoGuard";
 import type { RoleKind } from "../lib/auth/types";
 
 const findings: { level: "pass" | "fail"; msg: string }[] = [];
@@ -148,6 +162,22 @@ async function cleanup(usernames: string[], playerNames: string[]) {
   });
   const accountIds = accounts.map((a) => a.id);
   if (accountIds.length > 0) {
+    const drafts = await prisma.testDayDraft.findMany({
+      where: {
+        OR: [
+          { createdByAccountId: { in: accountIds } },
+          { members: { some: { accountId: { in: accountIds } } } },
+        ],
+      },
+      select: { id: true },
+    });
+    const draftIds = drafts.map((row) => row.id);
+    if (draftIds.length > 0) {
+      await prisma.testSession.deleteMany({
+        where: { sourceDraftId: { in: draftIds } },
+      });
+      await prisma.testDayDraft.deleteMany({ where: { id: { in: draftIds } } });
+    }
     await prisma.authSession.deleteMany({
       where: { accountId: { in: accountIds } },
     });
@@ -363,7 +393,7 @@ async function main() {
     else fail("player cannot backdate readiness");
 
     const secretNote = `SECRET_NOTE_${runId}`;
-    const today = getTodayDateStr();
+    const today = getTeamTodayDateStr("Asia/Shanghai");
     const fb = await saveSessionFeedback({
       date: today,
       activityTypes: ["batting"],
@@ -373,9 +403,57 @@ async function main() {
     if (fb.success) pass("player can write own feedback today");
     else fail(`player can write own feedback today (${fb.success === false ? fb.error : ""})`);
 
+    const draftKey = `fbdraft_${runId}`;
+    const fbOnce = await saveSessionFeedback({
+      date: today,
+      activityTypes: ["batting"],
+      sessionRpe: 4,
+      note: null,
+      clientDraftId: draftKey,
+    });
+    const fbRetry = await saveSessionFeedback({
+      date: today,
+      activityTypes: ["batting"],
+      sessionRpe: 6,
+      note: null,
+      clientDraftId: draftKey,
+    });
+    if (
+      fbOnce.success &&
+      fbRetry.success &&
+      fbOnce.entry.id === fbRetry.entry.id &&
+      fbRetry.entry.sessionRpe === 6
+    ) {
+      pass("feedback clientDraftId upserts instead of duplicating");
+    } else {
+      fail("feedback clientDraftId upserts instead of duplicating");
+    }
+    const listed = await getSessionFeedbacks(today);
+    if (
+      listed.success &&
+      listed.entries.some((row) => row.clientDraftId === draftKey)
+    ) {
+      pass("feedback list returns clientDraftId");
+    } else fail("feedback list returns clientDraftId");
+
     const ownCycle = await getCycleProfile();
     if (ownCycle.success) pass("player can read own cycle");
     else fail("player can read own cycle");
+
+    const periodDate = "2011-07-13";
+    const injurySecret = `SECRET_INJURY_${runId}`;
+    const consent = await consentToCycleTracking({
+      sharingLevel: "none",
+      seedPeriodStart: periodDate,
+    });
+    if (consent.success) pass("player can consent cycle tracking");
+    else fail(`player can consent cycle tracking (${consent.success === false ? consent.error : ""})`);
+    const period = await recordPeriodStart({
+      date: periodDate,
+      crampsScore: 9,
+    });
+    if (period.success) pass("player can record period start");
+    else fail(`player can record period start (${period.success === false ? period.error : ""})`);
 
     const ownInjury = await getInjuryCases();
     if (ownInjury.success) pass("player can read own injury");
@@ -419,6 +497,15 @@ async function main() {
       });
       if (!backdatedNote.success) pass("cannot backdate injury note");
       else fail("cannot backdate injury note");
+
+      const todayNote = await addInjuryNote({
+        caseId: todayCase.injuryCase.id,
+        kind: "treatment",
+        date: today,
+        content: injurySecret,
+      });
+      if (todayNote.success) pass("player can add injury note today");
+      else fail(`player can add injury note today (${todayNote.success === false ? todayNote.error : ""})`);
 
       await asUser(captain.token);
       const hijackParent = await createInjuryCase({
@@ -515,6 +602,7 @@ async function main() {
       const stale = await getSessionFromToken(player.token);
       if (!stale) pass("password change revokes old session");
       else fail("password change revokes old session");
+      player.token = await createSession(player.accountId);
     } else {
       fail(`password change revokes old session (${changed.error})`);
     }
@@ -545,8 +633,8 @@ async function main() {
         speedRecords: [],
       })
     );
-    if (capEmptyArchive.status === 400) pass("captain POST empty archive 400");
-    else fail(`captain POST empty archive 400 (got ${capEmptyArchive.status})`);
+    if (capEmptyArchive.status === 410) pass("captain POST /api/sessions 410");
+    else fail(`captain POST /api/sessions 410 (got ${capEmptyArchive.status})`);
 
     if (captain.playerId) {
       const capArchive = await postSessionsApi(
@@ -563,10 +651,78 @@ async function main() {
           speedRecords: [],
         })
       );
-      if (capArchive.status === 201) pass("captain POST /api/sessions 201");
-      else fail(`captain POST /api/sessions 201 (got ${capArchive.status})`);
+      if (capArchive.status === 410) pass("captain POST /api/sessions with hits 410");
+      else fail(`captain POST /api/sessions with hits 410 (got ${capArchive.status})`);
+
+      const capSave = await saveTestSession({
+        hits: [
+          {
+            id: `h_save_${runId}`,
+            result: "LD",
+            playerId: captain.playerId,
+            playerName: `${runId}_cap`,
+            timestamp: 1,
+          },
+        ],
+        speedRecords: [],
+        speedColumns: [],
+        speedMarks: [],
+        flyCatchAttempts: [],
+        strikeJudgeColumns: [],
+        strikeJudgeCells: [],
+        throwPlays: [],
+        assignments: {},
+        testItems: [],
+      });
+      if (!capSave.success) pass("captain saveTestSession disabled");
+      else fail("captain saveTestSession disabled");
     } else {
-      fail("captain POST /api/sessions 201");
+      fail("captain POST /api/sessions 410");
+    }
+
+    const secretItem = `密项${runId}`;
+    const createdDraft = await createTestDayDraft();
+    if (!createdDraft.success) {
+      fail(`captain can create test day draft (${createdDraft.error})`);
+    } else {
+      const patched = await updateTestDayDraftStructure(createdDraft.id, {
+        expectedVersion: 1,
+        testItems: [...DEFAULT_TEST_ITEMS, secretItem],
+      });
+      if (patched.success) pass("captain can patch draft structure");
+      else fail(`captain can patch draft structure (${patched.error})`);
+      const capDraft = await getTestDayDraft(createdDraft.id);
+      if (
+        capDraft.success &&
+        capDraft.draft.isMember &&
+        JSON.stringify(capDraft.draft).includes(secretItem)
+      ) {
+        pass("creator sees draft structure");
+      } else fail("creator sees draft structure");
+      await asUser(player.token);
+      const guestDraft = await getTestDayDraft(createdDraft.id);
+      const guestRaw = guestDraft.success
+        ? JSON.stringify(guestDraft.draft)
+        : "";
+      if (
+        guestDraft.success &&
+        !guestDraft.draft.isMember &&
+        guestDraft.draft.snapshot.testItems.length === 0 &&
+        !guestRaw.includes(secretItem)
+      ) {
+        pass("non-member cannot read draft structure");
+      } else {
+        fail(
+          `non-member cannot read draft structure (ok=${guestDraft.success} error=${
+            guestDraft.success ? "" : guestDraft.error
+          } member=${
+            guestDraft.success ? guestDraft.draft.isMember : "n/a"
+          } items=${
+            guestDraft.success ? guestDraft.draft.snapshot.testItems.length : "n/a"
+          } leaked=${guestRaw.includes(secretItem)})`
+        );
+      }
+      await asUser(captain.token);
     }
 
     await asUser(admin.token);
@@ -574,7 +730,7 @@ async function main() {
     if (!adminHealth.success) pass("admin without coach denied health");
     else fail("admin without coach denied health");
     const adminWrite = await saveReadinessAssessment({
-      date: getTodayDateStr(),
+      date: getTeamTodayDateStr("Asia/Shanghai"),
       sleep: 3,
       stress: 3,
       fatigue: 3,
@@ -595,6 +751,13 @@ async function main() {
       const raw = JSON.stringify(coachSummary.summary);
       if (raw.includes(secretNote)) fail("coach DTO excludes feedback note");
       else pass("coach DTO excludes feedback note");
+      if (raw.includes(periodDate)) fail("coach DTO excludes period date");
+      else pass("coach DTO excludes period date");
+      if (raw.includes(injurySecret)) fail("coach DTO excludes injury note");
+      else pass("coach DTO excludes injury note");
+      const leakedKey = findForbiddenCoachDtoKey(coachSummary.summary);
+      if (leakedKey) fail(`coach DTO excludes forbidden key ${leakedKey}`);
+      else pass("coach DTO has no forbidden keys");
       const hasNoteField = coachSummary.summary.sessionFeedbacks.some(
         (row) => "note" in row
       );

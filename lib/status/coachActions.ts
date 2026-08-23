@@ -1,7 +1,8 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { getTodayDateStr, parseDateOnly } from "@/lib/dateOnly";
+import { parseDateOnly } from "@/lib/dateOnly";
+import { getTeamTodayDateStr } from "@/lib/season/timeZone";
 import { QUADRANT_LABEL, type PreQuadrant } from "@/lib/clinical/preQuadrant";
 import { formatActivityLabels } from "@/lib/clinical/activityTypes";
 import {
@@ -14,6 +15,7 @@ import {
   requireHealthReader,
   requireTeamOpsReader,
 } from "@/lib/auth/actionGuard";
+import { findForbiddenCoachDtoKey } from "@/lib/auth/coachDtoGuard";
 
 export type CoachPlotPoint = {
   playerId: string;
@@ -124,7 +126,7 @@ export async function getCoachDaySummary(
     const date =
       typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
         ? dateStr
-        : getTodayDateStr();
+        : getTeamTodayDateStr(gate.ctx.teamTimeZone);
 
     const { playerIds, nameById } = await rosterPlayerIdsForHealth(
       gate.ctx.teamId
@@ -220,22 +222,25 @@ export async function getCoachDaySummary(
       })
     );
 
-    return {
-      success: true,
-      summary: {
-        date,
-        plotted,
-        unchecked,
-        watchList,
-        activeInjuries,
-        loadNotes,
-        sessionFeedbacks,
-        checkedInCount: plotted.length,
-        rosterCount: playerIds.length,
-        uncheckedCount: unchecked.length,
-        feedbackCount: sessionFeedbacks.length,
-      },
+    const summary: CoachDaySummary = {
+      date,
+      plotted,
+      unchecked,
+      watchList,
+      activeInjuries,
+      loadNotes,
+      sessionFeedbacks,
+      checkedInCount: plotted.length,
+      rosterCount: playerIds.length,
+      uncheckedCount: unchecked.length,
+      feedbackCount: sessionFeedbacks.length,
     };
+    const leaked = findForbiddenCoachDtoKey(summary);
+    if (leaked) {
+      console.error("教练摘要含敏感字段:", leaked);
+      return { success: false, error: "教练摘要生成失败" };
+    }
+    return { success: true, summary };
   } catch (error) {
     console.error("数据库写入失败的完整原因:", error);
     return { success: false, error: errorMessage(error) };
@@ -253,7 +258,7 @@ export async function getTeamOpsSummary(
     const date =
       typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
         ? dateStr
-        : getTodayDateStr();
+        : getTeamTodayDateStr(gate.ctx.teamTimeZone);
 
     const roster = await prisma.player.findMany({
       where: { teamId: gate.ctx.teamId },

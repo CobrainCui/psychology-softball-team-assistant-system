@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import AssignmentSidebar from "@/components/test-day/AssignmentSidebar";
 import CustomTestPanel from "@/components/test-day/CustomTestPanel";
 import FlyCatchPanel from "@/components/test-day/FlyCatchPanel";
@@ -35,24 +35,36 @@ export default function TestDayBoard({
   footer?: ReactNode;
 }) {
   const disabled = Boolean(scoresDisabled);
+  const [assignmentOpen, setAssignmentOpen] = useState(false);
 
   return (
     <>
-      <AssignmentSidebar
-        players={session.players}
-        testItems={session.testItems}
-        assignments={session.assignments}
-        assignmentLocked={session.assignmentLocked}
-        assignmentLog={session.assignmentLog}
-        sidebarMode={session.sidebarMode}
-        onSidebarModeChange={session.setSidebarMode}
-        onAddPlayer={canManageRoster ? session.handleAddPlayer : undefined}
-        onToggleAssignment={session.handleToggleAssignment}
-        onSelectAllTestsForPlayer={session.handleSelectAllTestsForPlayer}
-        onSelectAllPlayersForTest={session.handleSelectAllPlayersForTest}
-        onSaveAssignments={session.handleSaveAssignments}
-        onBeginEditAssignments={session.handleBeginEditAssignments}
-      />
+      <div className="w-full shrink-0 md:w-auto">
+        <button
+          type="button"
+          className="mb-2 w-full border border-zinc-300 bg-white py-2 text-sm text-zinc-800 md:hidden"
+          onClick={() => setAssignmentOpen((open) => !open)}
+        >
+          {assignmentOpen ? "收起排阵" : "展开排阵"}
+        </button>
+        <div className={assignmentOpen ? "block" : "hidden md:block"}>
+          <AssignmentSidebar
+            players={session.players}
+            testItems={session.testItems}
+            assignments={session.assignments}
+            assignmentLocked={session.assignmentLocked}
+            assignmentLog={session.assignmentLog}
+            sidebarMode={session.sidebarMode}
+            onSidebarModeChange={session.setSidebarMode}
+            onAddPlayer={canManageRoster ? session.handleAddPlayer : undefined}
+            onToggleAssignment={session.handleToggleAssignment}
+            onSelectAllTestsForPlayer={session.handleSelectAllTestsForPlayer}
+            onSelectAllPlayersForTest={session.handleSelectAllPlayersForTest}
+            onSaveAssignments={session.handleSaveAssignments}
+            onBeginEditAssignments={session.handleBeginEditAssignments}
+          />
+        </div>
+      </div>
 
       <main className="flex w-full flex-1 flex-col gap-4">
         {header}
@@ -74,7 +86,7 @@ export default function TestDayBoard({
                 <div className="border-b border-zinc-300 p-4">
                   {disabled ? (
                     <p className="mb-3 text-xs text-zinc-500">
-                      成绩录入暂不可用。请先加入场次。
+                      成绩录入暂不可用。
                     </p>
                   ) : null}
                   {tab === "T座打击" ? (

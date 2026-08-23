@@ -23,6 +23,8 @@ import {
 } from "@/lib/gameArchive";
 import { resolveSpeedGrid } from "@/lib/testDay/speedGrid";
 import { parseCustomTestSlice } from "@/lib/testDay/customTests";
+import { sessionAttributionDate } from "@/lib/season/window";
+import { resolveTeamTimeZone } from "@/lib/season/timeZone";
 import {
   DEFAULT_TEST_ITEMS,
   ensureRoleAssignmentItems,
@@ -55,6 +57,7 @@ type SessionWithRelations = {
   }[];
   speedColumns?: {
     id: string;
+    boardColumnId: string;
     name: string;
     sortOrder: number;
   }[];
@@ -156,8 +159,11 @@ export const sessionArchiveInclude = {
   },
 };
 
-// 推导步骤：archivedAt → date/gameId；关联 player.name 填回前端契约
-export function sessionToGameArchive(session: SessionWithRelations): GameArchive {
+// 推导步骤：archivedAt 用队时区自然日，禁止 UTC 切片当测试日日期
+export function sessionToGameArchive(
+  session: SessionWithRelations,
+  timeZone?: string | null
+): GameArchive {
   const hits: HitRecord[] = session.hits.map((hit) => ({
     id: hit.id,
     x: hit.x ?? undefined,
@@ -180,9 +186,16 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
     timestamp: row.recordedAt.getTime(),
   }));
 
+  // 推导步骤：落库主键 ≠ 盘面列 id；读回时用 boardColumnId 还原 firstBase 等
+  const persistToBoard = new Map(
+    (session.speedColumns ?? []).map((column) => [
+      column.id,
+      column.boardColumnId,
+    ])
+  );
   const mappedColumns: SpeedColumn[] = (session.speedColumns ?? []).map(
     (column) => ({
-      id: column.id,
+      id: column.boardColumnId,
       name: column.name,
       sortOrder: column.sortOrder,
     })
@@ -191,7 +204,7 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
     id: mark.id,
     playerId: mark.playerId,
     playerName: mark.player.name,
-    columnId: mark.columnId,
+    columnId: persistToBoard.get(mark.columnId) ?? mark.columnId,
     seconds: mark.seconds,
     timestamp: mark.recordedAt.getTime(),
   }));
@@ -261,7 +274,10 @@ export function sessionToGameArchive(session: SessionWithRelations): GameArchive
   return {
     schemaVersion: session.schemaVersion || GAME_ARCHIVE_SCHEMA_VERSION,
     gameId: session.archivedAt.getTime(),
-    date: session.archivedAt.toISOString(),
+    date: sessionAttributionDate(
+      session.archivedAt,
+      resolveTeamTimeZone(timeZone)
+    ),
     hits,
     speedRecords,
     speedColumns: speedGrid.columns,

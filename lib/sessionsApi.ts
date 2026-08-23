@@ -1,7 +1,6 @@
-// 测试日归档云端仓库：交卷写库；读取失败时回退本地历史。
+// 测试日归档云端仓库：读取失败时回退本地历史。正式写入只走协作草稿归档。
 
 import {
-  migrateGameArchive,
   migrateGameArchiveList,
   type GameArchive,
   type HitRecord,
@@ -9,6 +8,7 @@ import {
 } from "@/lib/gameArchive";
 import { loadGamesHistory, saveGamesHistory } from "@/lib/gamesHistory";
 import type { DraftScope } from "@/lib/scopedStorage";
+import { CLOUD_DRAFT_ARCHIVE_ONLY_ERROR } from "@/lib/testDay/archiveValidation";
 
 // 推导步骤：拉云端归档 → 归一 GameArchive → 覆盖本地历史缓存
 export async function fetchSessions(
@@ -27,28 +27,14 @@ export async function fetchSessions(
   }
 }
 
-// 推导步骤：POST 云端 → 成功后把返回快照追加进本地缓存（云端失败则不交卷）
 export async function archiveSessionToCloud(
   scope: DraftScope | null,
   hits: HitRecord[],
   speedRecords: SpeedRecord[]
 ): Promise<GameArchive | null> {
-  try {
-    const res = await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hits, speedRecords }),
-    });
-    if (!res.ok) {
-      console.error("云端被拒:", `sessions POST ${res.status}`);
-      return null;
-    }
-    const archived = migrateGameArchive(await res.json());
-    if (!archived) return null;
-    saveGamesHistory(scope, [...loadGamesHistory(scope), archived]);
-    return archived;
-  } catch (error) {
-    console.error("云端被拒:", error);
-    return null;
-  }
+  void scope;
+  void hits;
+  void speedRecords;
+  console.error("云端被拒:", CLOUD_DRAFT_ARCHIVE_ONLY_ERROR);
+  return null;
 }

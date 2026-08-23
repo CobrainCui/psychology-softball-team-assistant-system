@@ -1,44 +1,101 @@
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/lib/generated/prisma/client";
+import {
+  nextRateLimitState,
+  RATE_LIMIT_RULES,
+  type RateLimitKind,
+} from "@/lib/auth/rateLimitPolicy";
 
-const LIMITS: Record<string, { max: number; windowMs: number }> = {
-  setup: { max: 3, windowMs: 15 * 60 * 1000 },
-  login: { max: 5, windowMs: 15 * 60 * 1000 },
-  enroll: { max: 10, windowMs: 15 * 60 * 1000 },
-  reset: { max: 5, windowMs: 15 * 60 * 1000 },
-  role_grant: { max: 30, windowMs: 15 * 60 * 1000 },
+type LockedRateRow = {
+  bucket: string;
+  count: number;
+  windowEnd: Date | string;
 };
 
+async function lockRateLimitRow(
+  tx: Pick<typeof prisma, "$queryRaw">,
+  bucket: string
+): Promise<LockedRateRow | null> {
+  const rows = await tx.$queryRaw<LockedRateRow[]>`
+    SELECT bucket, count, "windowEnd"
+    FROM "AuthRateLimit"
+    WHERE bucket = ${bucket}
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
+}
+
 /**
- * 推导步骤：读桶 → 窗口过期则重置 → 原子递增 → 超限拒绝
+ * 推导步骤：事务内 FOR UPDATE 读桶 → nextRateLimitState → 写入；无行则创建，撞唯一约束则重锁。
  */
 export async function checkRateLimit(
   bucket: string,
-  kind: keyof typeof LIMITS
+  kind: RateLimitKind
 ): Promise<{ allowed: true } | { allowed: false; error: string }> {
-  const rule = LIMITS[kind];
-  const now = new Date();
-  const windowEnd = new Date(now.getTime() + rule.windowMs);
+  const rule = RATE_LIMIT_RULES[kind];
+  const denied = {
+    allowed: false as const,
+    error: "操作过于频繁，请稍后再试",
+  };
 
-  const row = await prisma.authRateLimit.findUnique({ where: { bucket } });
+  try {
+    return await prisma.$transaction(async (tx) => {
+      let row = await lockRateLimitRow(tx, bucket);
+      const now = new Date();
 
-  if (!row || row.windowEnd <= now) {
-    await prisma.authRateLimit.upsert({
-      where: { bucket },
-      create: { bucket, count: 1, windowEnd },
-      update: { count: 1, windowEnd },
+      if (!row) {
+        const next = nextRateLimitState({
+          nowMs: now.getTime(),
+          existing: null,
+          max: rule.max,
+          windowMs: rule.windowMs,
+        });
+        try {
+          await tx.authRateLimit.create({
+            data: {
+              bucket,
+              count: next.count,
+              windowEnd: new Date(next.windowEndMs),
+            },
+          });
+          return { allowed: true as const };
+        } catch (error) {
+          if (
+            !(
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === "P2002"
+            )
+          ) {
+            throw error;
+          }
+          row = await lockRateLimitRow(tx, bucket);
+          if (!row) throw error;
+        }
+      }
+
+      const next = nextRateLimitState({
+        nowMs: now.getTime(),
+        existing: {
+          count: row.count,
+          windowEndMs: new Date(row.windowEnd).getTime(),
+        },
+        max: rule.max,
+        windowMs: rule.windowMs,
+      });
+      if (!next.allowed) return denied;
+      await tx.authRateLimit.update({
+        where: { bucket },
+        data: {
+          count: next.count,
+          windowEnd: new Date(next.windowEndMs),
+        },
+      });
+      return { allowed: true as const };
     });
-    return { allowed: true };
+  } catch (error) {
+    console.error("限流检查失败:", error);
+    return denied;
   }
-
-  if (row.count >= rule.max) {
-    return { allowed: false, error: "操作过于频繁，请稍后再试" };
-  }
-
-  await prisma.authRateLimit.update({
-    where: { bucket },
-    data: { count: { increment: 1 } },
-  });
-  return { allowed: true };
 }
 
 export function clientIpFromHeaders(

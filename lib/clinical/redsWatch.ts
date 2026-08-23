@@ -1,6 +1,8 @@
 // RED-S / 女性运动员健康早期哨兵：规则触发转介提示，禁止自动诊断或禁赛。
 // 触发后球员端展示全文；教练端仅见 monitor_health 脱敏标签。
 
+import { asOfDateStrFrom, parseDateOnly } from "@/lib/dateOnly";
+
 export type RedsSignalInput = {
   /** 自报近 3 个月不规律/长期未来潮 */
   selfReportedIrregular: boolean;
@@ -59,16 +61,15 @@ export function evaluateRedsSignals(input: RedsSignalInput): RedsEvaluation {
 export function estimateMissedExpectedPeriods(
   lastPeriodStart: string | null,
   typicalLengthDays: number,
-  today: Date = new Date()
+  today: Date = new Date(),
+  asOfDateStr?: string
 ): number {
   if (!lastPeriodStart || !/^\d{4}-\d{2}-\d{2}$/.test(lastPeriodStart)) {
     return 0;
   }
   const length = Math.max(21, Math.min(40, Math.round(typicalLengthDays)));
-  const start = new Date(`${lastPeriodStart}T12:00:00.000Z`);
-  const todayNoon = new Date(
-    Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 12)
-  );
+  const start = parseDateOnly(lastPeriodStart);
+  const todayNoon = parseDateOnly(asOfDateStrFrom(asOfDateStr, today));
   const days = Math.floor(
     (todayNoon.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)
   );

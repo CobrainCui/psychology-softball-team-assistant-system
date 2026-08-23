@@ -21,16 +21,22 @@ import {
   updateSessionFeedback,
   type SessionFeedbackSaved,
 } from "@/lib/status/feedbackActions";
-import { getTodayDateStr } from "@/lib/dateOnly";
+import { getTeamTodayDateStr } from "@/lib/season/timeZone";
 import {
   appendSessionFeedbackDraft,
   deleteSessionFeedbackDraft,
+  latestUnsyncedFeedbackDraftId,
+  loadFailedSessionFeedbackDrafts,
   loadPlayerSessionFeedbackDrafts,
+  reconcileSessionFeedbackDrafts,
   updateSessionFeedbackDraft,
   type SessionFeedbackEntry,
 } from "@/lib/sessionFeedback";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import { draftScopeFromUser } from "@/lib/scopedStorage";
+import { useSyncOutbox } from "@/hooks/useSyncOutbox";
+import { PENDING_SYNC_COPY } from "@/lib/syncOutbox";
+import FailedLocalDraftTray from "@/components/status/FailedLocalDraftTray";
 
 const DEFAULT_ACTIVITY = ["batting"];
 
@@ -72,6 +78,8 @@ export default function SessionFeedbackPage() {
     source: "cloud" | "local";
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [failedLocal, setFailedLocal] = useState<SessionFeedbackEntry[]>([]);
+  const [retryDraftId, setRetryDraftId] = useState<string | null>(null);
 
   const scope = draftScopeFromUser(currentUser);
 
@@ -83,15 +91,34 @@ export default function SessionFeedbackPage() {
   };
 
   const reloadList = async (playerId: string) => {
-    const date = getTodayDateStr();
+    const date = getTeamTodayDateStr(currentUser?.teamTimeZone);
     const res = await getSessionFeedbacks(date);
-    const cloud = res.success ? res.entries.map(fromCloud) : [];
+    const cloudEntries = res.success ? res.entries : [];
     if (!res.success) console.error("云端被拒:", res.error);
+    reconcileSessionFeedbackDrafts(
+      scope,
+      playerId,
+      date,
+      cloudEntries.map((row) => ({
+        id: row.id,
+        clientDraftId: row.clientDraftId,
+      }))
+    );
+    const cloud = cloudEntries.map(fromCloud);
     const local = loadPlayerSessionFeedbackDrafts(scope, playerId, date)
       .filter((draft) => !cloud.some((row) => row.id === draft.id))
       .map(fromLocal);
     setEntries([...cloud, ...local]);
+    setFailedLocal(loadFailedSessionFeedbackDrafts(scope, playerId));
+    setRetryDraftId(latestUnsyncedFeedbackDraftId(scope, playerId, date));
   };
+
+  useSyncOutbox(scope, (result) => {
+    if (result.feedbackSynced.length > 0 && currentUser?.playerId) {
+      void reloadList(currentUser.playerId);
+      setNotice("已同步到云端");
+    }
+  });
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;
@@ -119,7 +146,7 @@ export default function SessionFeedbackPage() {
     }
     const playerId = currentUser.playerId;
     setStatus("saving");
-    const date = getTodayDateStr();
+    const date = getTeamTodayDateStr(currentUser.teamTimeZone);
     const noteTrimmed = note.trim() ? note.trim().slice(0, 200) : null;
     const payload = {
       date,
@@ -156,14 +183,21 @@ export default function SessionFeedbackPage() {
       return;
     }
 
-    const res = await saveSessionFeedback(payload);
+    const clientDraftId = retryDraftId ?? crypto.randomUUID();
+    const res = await saveSessionFeedback({
+      ...payload,
+      clientDraftId,
+    });
     if (res.success) {
+      deleteSessionFeedbackDraft(scope, clientDraftId);
+      setRetryDraftId(null);
       setStatus("saved");
       setView(res.view);
       resetForm();
     } else {
       console.error("云端被拒:", res.error);
       appendSessionFeedbackDraft(scope, {
+        id: clientDraftId,
         playerId,
         playerName: currentUser.playerName ?? currentUser.username,
         date,
@@ -171,8 +205,9 @@ export default function SessionFeedbackPage() {
         sessionRpe,
         note: noteTrimmed,
       });
+      setRetryDraftId(clientDraftId);
       setStatus("local");
-      setNotice("云端同步失败，已保存为本地草稿。");
+      setNotice(PENDING_SYNC_COPY);
       resetForm();
     }
     await reloadList(playerId);
@@ -230,6 +265,18 @@ export default function SessionFeedbackPage() {
             {notice}
           </p>
         ) : null}
+        <FailedLocalDraftTray
+          items={failedLocal.map((entry) => ({
+            id: entry.id,
+            summary: `${entry.date} 训后反馈未上云${
+              entry.failedReason ? ` · ${entry.failedReason}` : ""
+            }`,
+          }))}
+          onDismiss={(id) => {
+            deleteSessionFeedbackDraft(scope, id);
+            setFailedLocal(loadFailedSessionFeedbackDrafts(scope, currentUser.playerId ?? undefined));
+          }}
+        />
         {entries.length > 0 ? (
           <ul className="flex flex-col gap-1 border border-zinc-200 bg-white p-3">
             {entries.map((item) => (
@@ -240,7 +287,9 @@ export default function SessionFeedbackPage() {
                 <span>
                   {formatActivityLabels(item.activityTypes)} · 疲劳{" "}
                   {item.sessionRpe}
-                  {item.source === "local" ? " · 本地草稿" : ""}
+                  {item.source === "local"
+                    ? " · 待同步，本机未上云"
+                    : ""}
                   {editing?.id === item.id ? " · 修改中" : ""}
                 </span>
                 <RecordActions

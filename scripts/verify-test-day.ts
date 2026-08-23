@@ -4,6 +4,8 @@
  */
 import {
   migrateGameArchive,
+  GAME_ARCHIVE_SCHEMA_VERSION,
+  type GameArchive,
   type HitRecord,
 } from "../lib/gameArchive";
 import { sessionToGameArchive } from "../lib/sessionMapper";
@@ -20,6 +22,15 @@ import {
 } from "../lib/scopedStorage";
 import { STORAGE_KEYS } from "../lib/storageKeys";
 import {
+  isPermanentSyncReject,
+  testDayEntryDedupeKey,
+  testDayTombstoneDedupeKey,
+} from "../lib/syncOutbox";
+import { overlayPendingOnSnapshot } from "../lib/testDay/collab/pendingOverlay";
+import { emptyDraftBoardSnapshot } from "../lib/testDay/collab/projectSnapshot";
+import { addCalendarDays } from "../lib/dateOnly";
+import { isWithinTestDayArchiveWindow } from "../lib/season/timeZone";
+import {
   buildAssignmentCommitHeadline,
   formatAssignmentPairs,
 } from "../lib/testDay/assignmentLog";
@@ -27,6 +38,7 @@ import {
   buildClientArchivePayload,
   sessionArchiveHasContent,
 } from "../lib/testDay/archiveValidation";
+import { buildTestSessionCreateInput } from "../lib/testDay/sessionArchiveWrite";
 import {
   ensureCustomTestDefs,
   pruneCustomTestSlice,
@@ -40,6 +52,10 @@ import {
   parseSpeedSeconds,
   resolveSpeedGrid,
 } from "../lib/testDay/speedGrid";
+import {
+  archivePlayerLineCount,
+  buildArchivePlayerReviews,
+} from "../lib/testDay/archivePlayerReview";
 
 let failed = 0;
 
@@ -191,6 +207,97 @@ assert(
     `${STORAGE_KEYS.gamesHistory}:team1:acc1`,
   "其它草稿仍用两段分区键"
 );
+assert(
+  scopedKey(STORAGE_KEYS.syncOutbox, scope) ===
+    `${STORAGE_KEYS.syncOutbox}:team1:acc1`,
+  "待同步队列按账号分区"
+);
+assert(
+  testDayEntryDedupeKey("d1", "c1") === "entry:d1:c1" &&
+    testDayTombstoneDedupeKey("d1", "c1") === "tombstone:d1:c1",
+  "测试日队列去重键含 draftId 与 clientEntryId"
+);
+assert(
+  isPermanentSyncReject("草稿已归档，不能继续提交") === true &&
+    isPermanentSyncReject("仅可修改或删除当日记录") === true &&
+    isPermanentSyncReject("本机已确认同步，不能再录入。请先取消确认。") ===
+      true &&
+    isPermanentSyncReject("Failed to fetch") === false,
+  "永久拒绝不进重试，网络错误可重试"
+);
+assert(
+  addCalendarDays("2026-08-23", -1) === "2026-08-22" &&
+    addCalendarDays("2026-01-01", -1) === "2025-12-31",
+  "日历日加减不经过本地时区"
+);
+assert(
+  isWithinTestDayArchiveWindow(
+    "2026-08-22",
+    "Asia/Shanghai",
+    new Date("2026-08-23T04:00:00.000Z")
+  ) &&
+    !isWithinTestDayArchiveWindow(
+      "2026-08-21",
+      "Asia/Shanghai",
+      new Date("2026-08-23T04:00:00.000Z")
+    ),
+  "测试日可次日补归档，更早日期拒绝"
+);
+
+const pendingHit = overlayPendingOnSnapshot(
+  emptyDraftBoardSnapshot(),
+  [
+    {
+      schemaVersion: 2,
+      id: "q1",
+      kind: "test_day_entry",
+      status: "pending",
+      dedupeKey: "entry:d1:h-pending",
+      createdAt: 1,
+      attempts: 0,
+      payload: {
+        draftId: "d1",
+        kind: "hit",
+        payload: {
+          id: "h-pending",
+          result: "LD",
+          playerId: "p1",
+          playerName: "甲",
+          timestamp: 1,
+        },
+      },
+    },
+    {
+      schemaVersion: 2,
+      id: "q2",
+      kind: "test_day_entry",
+      status: "failed",
+      dedupeKey: "entry:d1:h-failed",
+      createdAt: 2,
+      attempts: 1,
+      payload: {
+        draftId: "d1",
+        kind: "hit",
+        payload: {
+          id: "h-failed",
+          result: "FB",
+          playerId: "p1",
+          playerName: "甲",
+          timestamp: 2,
+        },
+      },
+      failedReason: "草稿已归档，不能继续提交",
+    },
+  ],
+  "d1"
+);
+assert(
+  pendingHit.snapshot.hits.length === 1 &&
+    pendingHit.snapshot.hits[0]?.id === "h-pending" &&
+    pendingHit.pendingIds.includes("h-pending") &&
+    !pendingHit.pendingIds.includes("h-failed"),
+  "待同步 Entry 投影到盘面，失败匣不投影"
+);
 
 const promote = resolveLiveDraftMigration(null, '{"hits":[]}');
 assert(
@@ -293,6 +400,222 @@ assert(
     roundTrip.assignments.p1?.includes("接高飞") === true &&
     roundTrip.assignmentLog[0]?.author === "队长",
   "归档 mapper → migrate 排阵字段仍在"
+);
+
+const reviewArchive: GameArchive = {
+  schemaVersion: GAME_ARCHIVE_SCHEMA_VERSION,
+  gameId: 1,
+  date: "2026-08-23",
+  hits: [
+    {
+      id: "h1",
+      result: "LD",
+      playerId: "p1",
+      playerName: "甲",
+      timestamp: 1,
+    },
+  ],
+  speedRecords: [],
+  speedColumns: [{ id: "firstBase", name: "上一垒", sortOrder: 0 }],
+  speedMarks: [
+    {
+      id: "s1",
+      playerId: "p1",
+      playerName: "甲",
+      columnId: "firstBase",
+      seconds: 4.2,
+      timestamp: 1,
+    },
+  ],
+  flyCatchAttempts: [],
+  strikeJudgeColumns: [],
+  strikeJudgeCells: [],
+  throwPlays: [],
+  customTestDefs: [],
+  customPlayerNotes: [],
+  customGroupNotes: [],
+  customSingleNotes: [],
+  assignments: { p1: ["T座打击"], p2: ["接高飞"] },
+  testItems: ["T座打击", "接高飞"],
+  assignmentLog: [],
+};
+const reviews = buildArchivePlayerReviews(reviewArchive, {
+  p1: "甲",
+  p2: "乙",
+});
+const playerA = reviews.find((row) => row.playerId === "p1");
+const playerB = reviews.find((row) => row.playerId === "p2");
+assert(reviews.length === 2, "archive review includes assigned players");
+assert(
+  playerA?.hits.length === 1 &&
+    playerA.speedMarks[0]?.columnName === "上一垒" &&
+    playerA.speedMarks[0]?.seconds === 4.2,
+  "archive review groups hits and speed cells by player"
+);
+assert(
+  playerB !== undefined && archivePlayerLineCount(playerB) === 0,
+  "assigned player without scores still listed"
+);
+
+const persistSpeedA = buildTestSessionCreateInput(
+  buildClientArchivePayload({
+    hits: [],
+    speedColumns: [{ id: "firstBase", name: "上一垒", sortOrder: 0 }],
+    speedMarks: [
+      {
+        id: "m1",
+        playerId: "p1",
+        playerName: "甲",
+        columnId: "firstBase",
+        seconds: 3.9,
+        timestamp: 1,
+      },
+    ],
+    flyCatchAttempts: [],
+    strikeJudgeColumns: [],
+    strikeJudgeCells: [],
+    throwPlays: [],
+    assignments: {},
+    testItems: [],
+    assignmentLog: [],
+    customTestDefs: [],
+    customPlayerNotes: [],
+    customGroupNotes: [],
+    customSingleNotes: [],
+  }),
+  "team-a",
+  archivedAt
+);
+const persistSpeedB = buildTestSessionCreateInput(
+  buildClientArchivePayload({
+    hits: [],
+    speedColumns: [{ id: "firstBase", name: "上一垒", sortOrder: 0 }],
+    speedMarks: [
+      {
+        id: "m2",
+        playerId: "p2",
+        playerName: "乙",
+        columnId: "firstBase",
+        seconds: 4.0,
+        timestamp: 1,
+      },
+    ],
+    flyCatchAttempts: [],
+    strikeJudgeColumns: [],
+    strikeJudgeCells: [],
+    throwPlays: [],
+    assignments: {},
+    testItems: [],
+    assignmentLog: [],
+    customTestDefs: [],
+    customPlayerNotes: [],
+    customGroupNotes: [],
+    customSingleNotes: [],
+  }),
+  "team-b",
+  archivedAt
+);
+function asCreateRows(
+  value: unknown
+): Array<{ id?: string; boardColumnId?: string; columnId?: string }> {
+  if (Array.isArray(value)) {
+    return value as Array<{
+      id?: string;
+      boardColumnId?: string;
+      columnId?: string;
+    }>;
+  }
+  if (value && typeof value === "object") {
+    return [
+      value as {
+        id?: string;
+        boardColumnId?: string;
+        columnId?: string;
+      },
+    ];
+  }
+  return [];
+}
+
+const speedColA = asCreateRows(persistSpeedA.speedColumns?.create)[0];
+const speedColB = asCreateRows(persistSpeedB.speedColumns?.create)[0];
+const speedMarkA = asCreateRows(persistSpeedA.speedMarks?.create)[0];
+assert(
+  speedColA?.boardColumnId === "firstBase" &&
+    speedColB?.boardColumnId === "firstBase" &&
+    typeof speedColA?.id === "string" &&
+    speedColA.id !== "firstBase" &&
+    speedColA.id !== speedColB?.id &&
+    speedMarkA?.columnId === speedColA.id,
+  "跑垒落库主键按场次另发，盘面 firstBase 不进全局 id"
+);
+
+const remappedSpeed = sessionToGameArchive({
+  schemaVersion: 5,
+  archivedAt,
+  assignments: {},
+  testItems: [],
+  assignmentLog: [],
+  customTests: null,
+  hits: [],
+  speedRecords: [],
+  speedColumns: [
+    {
+      id: "persist-col-1",
+      boardColumnId: "firstBase",
+      name: "上一垒",
+      sortOrder: 0,
+    },
+  ],
+  speedMarks: [
+    {
+      id: "persist-mark-1",
+      columnId: "persist-col-1",
+      playerId: "p1",
+      seconds: 3.9,
+      recordedAt: archivedAt,
+      player: { id: "p1", name: "甲" },
+    },
+  ],
+  flyCatchAttempts: [],
+  strikeJudgeColumns: [],
+  strikeJudgeCells: [],
+  throwPlays: [],
+});
+assert(
+  remappedSpeed.speedColumns[0]?.id === "firstBase" &&
+    remappedSpeed.speedMarks[0]?.columnId === "firstBase",
+  "读回归档把落库主键还原为盘面 firstBase"
+);
+
+const lateUtc = new Date("2026-08-23T16:00:00.000Z");
+const tzBody = {
+  schemaVersion: 5,
+  archivedAt: lateUtc,
+  assignments: {},
+  testItems: [],
+  assignmentLog: [],
+  customTests: null,
+  hits: [],
+  speedRecords: [],
+  speedColumns: [],
+  speedMarks: [],
+  flyCatchAttempts: [],
+  strikeJudgeColumns: [],
+  strikeJudgeCells: [],
+  throwPlays: [],
+};
+assert(
+  sessionToGameArchive(tzBody, "Asia/Shanghai").date === "2026-08-24",
+  "上海时区 16:00Z 归档日为次日"
+);
+assert(
+  sessionToGameArchive(tzBody, "America/Los_Angeles").date === "2026-08-23",
+  "洛杉矶时区 16:00Z 归档日仍为当日"
+);
+assert(
+  sessionToGameArchive(tzBody).date === "2026-08-24",
+  "未传时区时默认上海自然日"
 );
 
 if (failed > 0) {

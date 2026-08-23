@@ -1,6 +1,8 @@
 // 个人化周期阶段推算：以「上次经期开始日」为第 1 天。
 // 黄体期约 14 天倒推排卵窗；assessment / 其它模块共用，禁止再复制分期边界。
 
+import { asOfDateStrFrom, parseDateOnly } from "@/lib/dateOnly";
+
 export type CycleConfidence = "low" | "medium" | "high";
 
 export type CyclePhaseCode =
@@ -32,6 +34,8 @@ export interface CyclePhaseOptions {
   confidence?: CycleConfidence;
   /** 激素避孕或高波动：降级为症状驱动 */
   hidePhaseLabels?: boolean;
+  /** 队时区自然日 YYYY-MM-DD */
+  asOfDateStr?: string;
 }
 
 const PHASE_LABEL: Record<CyclePhaseCode, string> = {
@@ -85,9 +89,9 @@ export function getCyclePhase(
   const confidence = options.confidence ?? "low";
   const hidePhaseLabels = Boolean(options.hidePhaseLabels);
 
-  const startDate = new Date(`${startDateStr}T12:00:00.000Z`);
-  const todayNoon = new Date(
-    Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 12)
+  const startDate = parseDateOnly(startDateStr);
+  const todayNoon = parseDateOnly(
+    asOfDateStrFrom(options.asOfDateStr, today)
   );
   const oneDayMs = 1000 * 60 * 60 * 24;
   const diffDays = Math.floor(

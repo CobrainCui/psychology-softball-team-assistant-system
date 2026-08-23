@@ -29,8 +29,21 @@ import {
   canViewTeamSeasonReports,
   canWriteOwnHealthData,
   coachHealthFieldAllowed,
+  canViewTestDayDraftSnapshot,
 } from "../lib/auth/policy";
+import { nextRateLimitState } from "../lib/auth/rateLimitPolicy";
+import {
+  findForbiddenCoachDtoKey,
+} from "../lib/auth/coachDtoGuard";
+import { buildGuestDraftDto } from "../lib/testDay/collab/dto";
 import { resolvePublicAppOrigin } from "../lib/auth/publicOrigin";
+import { getTodayDateStr } from "../lib/dateOnly";
+import {
+  getTeamTodayDateStr,
+  isTeamTodayDateOnly,
+  isWithinTestDayArchiveWindow,
+} from "../lib/season/timeZone";
+import { rejectIfNotToday } from "../lib/status/shared";
 
 const findings: { level: "pass" | "fail"; msg: string }[] = [];
 
@@ -48,6 +61,7 @@ function ctx(partial: Partial<AuthContext> & Pick<AuthContext, "roles">): AuthCo
     accountId: "a1",
     username: "u1",
     teamId: "t1",
+    teamTimeZone: "Asia/Shanghai",
     playerId: partial.playerId ?? "p1",
     playerName: "测试",
     gender: partial.gender ?? null,
@@ -151,6 +165,7 @@ function testPolicyMatrix() {
       accountId: "a1",
       username: "u1",
       teamId: "t1",
+      teamTimeZone: "Asia/Shanghai",
       playerId: "p1",
       playerName: "测试",
       gender: null,
@@ -166,6 +181,7 @@ function testPolicyMatrix() {
       accountId: "a1",
       username: "u1",
       teamId: "t1",
+      teamTimeZone: "Asia/Shanghai",
       playerId: "p1",
       playerName: "测试",
       gender: null,
@@ -224,8 +240,16 @@ function testPolicyMatrix() {
 
   if (!coachHealthFieldAllowed("feedback_note")) pass("coach excludes feedback note");
   else fail("coach excludes feedback note");
+  if (!coachHealthFieldAllowed("injury_note")) pass("coach excludes injury note");
+  else fail("coach excludes injury note");
+  if (!coachHealthFieldAllowed("cycle_raw")) pass("coach excludes cycle raw");
+  else fail("coach excludes cycle raw");
   if (coachHealthFieldAllowed("rpe")) pass("coach includes rpe");
   else fail("coach includes rpe");
+  if (canViewTestDayDraftSnapshot(true)) pass("draft members can view snapshot");
+  else fail("draft members can view snapshot");
+  if (canViewTestDayDraftSnapshot(false)) fail("non-members cannot view snapshot");
+  else pass("non-members cannot view snapshot");
 }
 
 function testPublicOrigin() {
@@ -247,11 +271,139 @@ function testPublicOrigin() {
   } else fail("NEXT_PUBLIC_APP_URL origin stripped to host");
 }
 
+function testRateLimitAndCoachDto() {
+  const windowMs = 60_000;
+  const now = 1_000_000;
+  const fresh = nextRateLimitState({
+    nowMs: now,
+    existing: null,
+    max: 5,
+    windowMs,
+  });
+  if (fresh.allowed && fresh.count === 1) pass("rate limit first hit allowed");
+  else fail("rate limit first hit allowed");
+
+  const expired = nextRateLimitState({
+    nowMs: now,
+    existing: { count: 5, windowEndMs: now - 1 },
+    max: 5,
+    windowMs,
+  });
+  if (expired.allowed && expired.count === 1) pass("rate limit expired window resets");
+  else fail("rate limit expired window resets");
+
+  const full = nextRateLimitState({
+    nowMs: now,
+    existing: { count: 5, windowEndMs: now + windowMs },
+    max: 5,
+    windowMs,
+  });
+  if (!full.allowed && full.count === 5) pass("rate limit at max denied without increment");
+  else fail("rate limit at max denied without increment");
+
+  const bump = nextRateLimitState({
+    nowMs: now,
+    existing: { count: 4, windowEndMs: now + windowMs },
+    max: 5,
+    windowMs,
+  });
+  if (bump.allowed && bump.count === 5) pass("rate limit below max increments");
+  else fail("rate limit below max increments");
+
+  const leak = findForbiddenCoachDtoKey({
+    plotted: [],
+    periodStartDates: ["2011-07-13"],
+  });
+  if (leak === "periodStartDates") pass("coach dto guard catches periodStartDates");
+  else fail("coach dto guard catches periodStartDates");
+
+  const clean = findForbiddenCoachDtoKey({
+    plotted: [{ playerId: "p1", quadrant: "peak" }],
+    loadNotes: [{ physiologicalLoadLabel: "低" }],
+  });
+  if (clean === null) pass("coach dto guard allows load tag");
+  else fail("coach dto guard allows load tag");
+
+  const guest = buildGuestDraftDto({
+    draft: {
+      id: "d1",
+      date: new Date("2026-08-23T12:00:00.000Z"),
+      status: "open",
+      version: 2,
+      createdByAccountId: "a1",
+    },
+  });
+  if (
+    !guest.isMember &&
+    guest.conflicts.length === 0 &&
+    guest.snapshot.hits.length === 0 &&
+    guest.snapshot.assignmentLog.length === 0
+  ) {
+    pass("guest draft dto has no scores");
+  } else fail("guest draft dto has no scores");
+}
+
+function testTeamTodayBoundary() {
+  const shanghaiMidnight = new Date("2026-08-21T16:00:00.000Z");
+  if (getTodayDateStr(shanghaiMidnight) === "2026-08-21") {
+    pass("UTC calendar of 16:00Z is Aug 21");
+  } else fail("UTC calendar of 16:00Z is Aug 21");
+  if (getTeamTodayDateStr("Asia/Shanghai", shanghaiMidnight) === "2026-08-22") {
+    pass("Shanghai natural day of 16:00Z is Aug 22");
+  } else fail("Shanghai natural day of 16:00Z is Aug 22");
+  if (
+    isTeamTodayDateOnly("2026-08-22", "Asia/Shanghai", shanghaiMidnight) &&
+    !isTeamTodayDateOnly("2026-08-21", "Asia/Shanghai", shanghaiMidnight)
+  ) {
+    pass("Shanghai today-only uses team date not UTC");
+  } else fail("Shanghai today-only uses team date not UTC");
+  if (
+    rejectIfNotToday("2026-08-21", "Asia/Shanghai", shanghaiMidnight) !== null
+  ) {
+    pass("reject UTC yesterday at Shanghai 00:00");
+  } else fail("reject UTC yesterday at Shanghai 00:00");
+  if (
+    rejectIfNotToday("2026-08-22", "Asia/Shanghai", shanghaiMidnight) === null
+  ) {
+    pass("allow Shanghai today at 00:00");
+  } else fail("allow Shanghai today at 00:00");
+
+  if (
+    isWithinTestDayArchiveWindow(
+      "2026-08-22",
+      "Asia/Shanghai",
+      shanghaiMidnight
+    ) &&
+    isWithinTestDayArchiveWindow(
+      "2026-08-21",
+      "Asia/Shanghai",
+      shanghaiMidnight
+    ) &&
+    !isWithinTestDayArchiveWindow(
+      "2026-08-20",
+      "Asia/Shanghai",
+      shanghaiMidnight
+    )
+  ) {
+    pass("test-day archive window is today or next-day makeup");
+  } else fail("test-day archive window is today or next-day makeup");
+
+  const laEvening = new Date("2026-08-22T06:30:00.000Z");
+  if (getTodayDateStr(laEvening) === "2026-08-22") {
+    pass("UTC calendar of 06:30Z is Aug 22");
+  } else fail("UTC calendar of 06:30Z is Aug 22");
+  if (getTeamTodayDateStr("America/Los_Angeles", laEvening) === "2026-08-21") {
+    pass("LA natural day of 06:30Z is Aug 21");
+  } else fail("LA natural day of 06:30Z is Aug 21");
+}
+
 async function main() {
   await testPassword();
   testEnrollmentToken();
   testPolicyMatrix();
   testPublicOrigin();
+  testRateLimitAndCoachDto();
+  testTeamTodayBoundary();
 
   const failed = findings.filter((f) => f.level === "fail").length;
   console.log(`\n${findings.length} checks, ${failed} failed`);

@@ -18,6 +18,7 @@ export type SaveSessionFeedbackPayload = {
   activityTypes: string[];
   sessionRpe: number;
   note: string | null;
+  clientDraftId?: string | null;
 };
 
 export type SessionFeedbackSaved = {
@@ -26,7 +27,16 @@ export type SessionFeedbackSaved = {
   activityTypes: string[];
   sessionRpe: number;
   note: string | null;
+  clientDraftId: string | null;
 };
+
+function parseClientDraftId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const id = value.trim();
+  if (id.length < 8 || id.length > 80) return null;
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return null;
+  return id;
+}
 
 function mapSessionFeedbackSaved(row: {
   id: string;
@@ -34,6 +44,7 @@ function mapSessionFeedbackSaved(row: {
   activityTypes: string[];
   sessionRpe: number;
   note: string | null;
+  clientDraftId: string | null;
 }): SessionFeedbackSaved {
   return {
     id: row.id,
@@ -41,6 +52,7 @@ function mapSessionFeedbackSaved(row: {
     activityTypes: row.activityTypes,
     sessionRpe: row.sessionRpe,
     note: row.note,
+    clientDraftId: row.clientDraftId,
   };
 }
 
@@ -90,7 +102,7 @@ export async function saveSessionFeedback(
     const gate = await requireOwnDataWriter();
     if (!gate.success) return gate;
     const playerId = gate.playerId;
-    const dayErr = rejectIfNotToday(payload.date);
+    const dayErr = rejectIfNotToday(payload.date, gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     const sessionRpe = clampScore0to10(payload.sessionRpe);
     if (sessionRpe === null || sessionRpe < 1) {
@@ -108,18 +120,45 @@ export async function saveSessionFeedback(
     if (!player) return { success: false, error: "云端无此队员" };
 
     const date = parseDateOnly(payload.date);
-    const created = await prisma.sessionFeedback.create({
-      data: {
-        player: { connect: { id: player.id } },
-        date,
-        schemaVersion: SESSION_FEEDBACK_SCHEMA_VERSION,
-        activityTypes: typesRes.types,
-        sessionRpe,
-        durationMin: null,
-        sessionLoad: sessionRpe,
-        note,
-      },
-    });
+    const clientDraftId = parseClientDraftId(payload.clientDraftId);
+    const data = {
+      date,
+      schemaVersion: SESSION_FEEDBACK_SCHEMA_VERSION,
+      activityTypes: typesRes.types,
+      sessionRpe,
+      durationMin: null,
+      sessionLoad: sessionRpe,
+      note,
+      clientDraftId,
+    };
+    // 推导步骤：带本机草稿 id 则按 player+clientDraftId upsert，避免弱网重试双计
+    const created = clientDraftId
+      ? await prisma.sessionFeedback.upsert({
+          where: {
+            playerId_clientDraftId: {
+              playerId: player.id,
+              clientDraftId,
+            },
+          },
+          create: {
+            player: { connect: { id: player.id } },
+            ...data,
+          },
+          update: {
+            activityTypes: data.activityTypes,
+            sessionRpe: data.sessionRpe,
+            durationMin: null,
+            sessionLoad: data.sessionLoad,
+            note: data.note,
+            schemaVersion: data.schemaVersion,
+          },
+        })
+      : await prisma.sessionFeedback.create({
+          data: {
+            player: { connect: { id: player.id } },
+            ...data,
+          },
+        });
 
     const view = await buildFeedbackViewForSaved(
       player.id,
@@ -157,6 +196,7 @@ export async function getSessionFeedbacks(
         activityTypes: true,
         sessionRpe: true,
         note: true,
+        clientDraftId: true,
       },
     });
     return { success: true, entries: rows.map(mapSessionFeedbackSaved) };
@@ -181,7 +221,7 @@ export async function updateSessionFeedback(
     if (typeof payload.id !== "string" || !payload.id.trim()) {
       return { success: false, error: "id 无效" };
     }
-    const dayErr = rejectIfNotToday(payload.date);
+    const dayErr = rejectIfNotToday(payload.date, gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     const sessionRpe = clampScore0to10(payload.sessionRpe);
     if (sessionRpe === null || sessionRpe < 1) {
@@ -195,7 +235,7 @@ export async function updateSessionFeedback(
     });
     if (!existing) return { success: false, error: "找不到该训后反馈" };
     const existingDate = formatDateOnly(existing.date);
-    const existingDayErr = rejectIfNotToday(existingDate);
+    const existingDayErr = rejectIfNotToday(existingDate, gate.ctx.teamTimeZone);
     if (existingDayErr) return existingDayErr;
 
     const noteRaw = typeof payload.note === "string" ? payload.note.trim() : "";
@@ -217,6 +257,7 @@ export async function updateSessionFeedback(
         activityTypes: true,
         sessionRpe: true,
         note: true,
+        clientDraftId: true,
       },
     });
     const view = await buildFeedbackViewForSaved(
@@ -247,7 +288,7 @@ export async function deleteSessionFeedback(payload: {
       select: { id: true, date: true },
     });
     if (!existing) return { success: false, error: "找不到该训后反馈" };
-    const dayErr = rejectIfNotToday(formatDateOnly(existing.date));
+    const dayErr = rejectIfNotToday(formatDateOnly(existing.date), gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     await prisma.sessionFeedback.delete({ where: { id: existing.id } });
     return { success: true };

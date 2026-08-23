@@ -9,12 +9,9 @@ import {
 } from "@/lib/players";
 import { requireArchiver, requireApprovedSession } from "@/lib/auth/actionGuard";
 import {
-  collectSessionArchivePlayerIds,
-  normalizeSessionArchivePayload,
-  sessionArchiveHasContent,
+  CLOUD_DRAFT_ARCHIVE_ONLY_ERROR,
   type SessionArchivePayload,
 } from "@/lib/testDay/archiveValidation";
-import { buildTestSessionCreateInput } from "@/lib/testDay/sessionArchiveWrite";
 import { errorMessage, type ActionResult } from "@/lib/actionResult";
 
 export type CloudPlayer = {
@@ -115,51 +112,15 @@ export type SaveTestSessionResult =
   | { success: true; id: string; gameId: number; date: string }
   | { success: false; error: string };
 
-// 推导步骤：校验非空 → 校验 playerId → buildTestSessionCreateInput → create
+// 推导步骤：遗留本机/Action 归档已关闭；正式成绩只走 archiveTestDayDraft
 export async function saveTestSession(
   payload: SaveTestSessionPayload
 ): Promise<SaveTestSessionResult> {
+  void payload;
   try {
     const gate = await requireArchiver();
     if (!gate.success) return gate;
-
-    const data = normalizeSessionArchivePayload(payload);
-
-    if (!sessionArchiveHasContent(data)) {
-      return { success: false, error: "归档内容为空" };
-    }
-
-    const teamId = gate.ctx.teamId;
-    const archivedAt = new Date();
-    const prismaData = buildTestSessionCreateInput(payload, teamId, archivedAt);
-
-    const playerIds = collectSessionArchivePlayerIds(data);
-    if (playerIds.length > 0) {
-      const existing = await prisma.player.findMany({
-        where: { teamId, id: { in: playerIds } },
-        select: { id: true },
-      });
-      if (existing.length !== playerIds.length) {
-        const known = new Set(existing.map((p) => p.id));
-        const missing = playerIds.filter((id) => !known.has(id));
-        return {
-          success: false,
-          error: `含未入册队员 id: ${missing.join(", ")}。请先登录页拉取云端名册后再测。`,
-        };
-      }
-    }
-
-    const session = await prisma.testSession.create({
-      data: prismaData,
-      select: { id: true, archivedAt: true },
-    });
-
-    return {
-      success: true,
-      id: session.id,
-      gameId: session.archivedAt.getTime(),
-      date: session.archivedAt.toISOString(),
-    };
+    return { success: false, error: CLOUD_DRAFT_ARCHIVE_ONLY_ERROR };
   } catch (error) {
     console.error("数据库写入失败的完整原因:", error);
     return { success: false, error: errorMessage(error) };

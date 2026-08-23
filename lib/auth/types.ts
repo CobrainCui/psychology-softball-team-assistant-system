@@ -12,6 +12,7 @@ export type AuthContext = {
   accountId: string;
   username: string;
   teamId: string;
+  teamTimeZone: string;
   playerId: string | null;
   playerName: string | null;
   gender: Gender | null;
@@ -25,6 +26,7 @@ export type SessionUser = {
   accountId: string;
   username: string;
   teamId: string;
+  teamTimeZone: string;
   playerId: string | null;
   playerName: string | null;
   gender: Gender | null;

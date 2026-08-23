@@ -1,7 +1,8 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { formatDateOnly, getTodayDateStr, parseDateOnly } from "@/lib/dateOnly";
+import { formatDateOnly, parseDateOnly } from "@/lib/dateOnly";
+import { getTeamTodayDateStr } from "@/lib/season/timeZone";
 import type { PainArea } from "@/lib/clinical/painAreas";
 import {
   isInjuryKind,
@@ -72,7 +73,7 @@ export async function createInjuryCase(
     }
     const painScore = clampScore0to10(payload.painScore);
     if (painScore === null) return { success: false, error: "painScore 无效" };
-    const dayErr = rejectIfNotToday(payload.startDate);
+    const dayErr = rejectIfNotToday(payload.startDate, gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
 
     const player = await prisma.player.findUnique({
@@ -141,7 +142,7 @@ export async function addInjuryPainLog(
     const playerId = gate.playerId;
     const painScore = clampScore0to10(payload.painScore);
     if (painScore === null) return { success: false, error: "painScore 无效" };
-    const dayErr = rejectIfNotToday(payload.date);
+    const dayErr = rejectIfNotToday(payload.date, gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     const existing = await prisma.injuryCase.findFirst({
       where: { id: payload.caseId, playerId: playerId },
@@ -193,7 +194,7 @@ export async function addInjuryNote(
     }
     const content = typeof payload.content === "string" ? payload.content.trim() : "";
     if (!content) return { success: false, error: "备注不能为空" };
-    const dayErr = rejectIfNotToday(payload.date);
+    const dayErr = rejectIfNotToday(payload.date, gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     const existing = await prisma.injuryCase.findFirst({
       where: { id: payload.caseId, playerId: playerId },
@@ -235,7 +236,7 @@ export async function markInjuryRecovered(payload: {
       typeof payload.recoveredAt === "string" &&
       /^\d{4}-\d{2}-\d{2}$/.test(payload.recoveredAt)
         ? parseDateOnly(payload.recoveredAt)
-        : parseDateOnly(getTodayDateStr());
+        : parseDateOnly(getTeamTodayDateStr(gate.ctx.teamTimeZone));
     const row = await prisma.injuryCase.update({
       where: { id: existing.id },
       data: { status: "recovered", recoveredAt },
@@ -266,7 +267,7 @@ export async function updateInjuryCase(
       where: { id: payload.caseId, playerId: playerId },
     });
     if (!existing) return { success: false, error: "找不到该损伤记录" };
-    const dayErr = rejectIfNotToday(formatDateOnly(existing.startDate));
+    const dayErr = rejectIfNotToday(formatDateOnly(existing.startDate), gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     const painArea = asPainArea(payload.painArea);
     if (!painArea) return { success: false, error: "painArea 无效" };
@@ -300,7 +301,7 @@ export async function deleteInjuryCase(payload: {
       where: { id: payload.caseId, playerId: playerId },
     });
     if (!existing) return { success: false, error: "找不到该损伤记录" };
-    const dayErr = rejectIfNotToday(formatDateOnly(existing.startDate));
+    const dayErr = rejectIfNotToday(formatDateOnly(existing.startDate), gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     await prisma.injuryCase.delete({ where: { id: existing.id } });
     return { success: true };
@@ -333,7 +334,7 @@ export async function updateInjuryPainLog(
     if (!log || log.injuryCase.playerId !== playerId) {
       return { success: false, error: "找不到该疼痛记录" };
     }
-    const dayErr = rejectIfNotToday(formatDateOnly(log.date));
+    const dayErr = rejectIfNotToday(formatDateOnly(log.date), gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     await prisma.injuryPainLog.update({
       where: { id: log.id },
@@ -371,7 +372,7 @@ export async function deleteInjuryPainLog(payload: {
     if (!log || log.injuryCase.playerId !== playerId) {
       return { success: false, error: "找不到该疼痛记录" };
     }
-    const dayErr = rejectIfNotToday(formatDateOnly(log.date));
+    const dayErr = rejectIfNotToday(formatDateOnly(log.date), gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     await prisma.injuryPainLog.delete({ where: { id: log.id } });
     const row = await prisma.injuryCase.findUnique({
@@ -408,7 +409,7 @@ export async function updateInjuryNote(
     if (!note || note.injuryCase.playerId !== playerId) {
       return { success: false, error: "找不到该备注" };
     }
-    const dayErr = rejectIfNotToday(formatDateOnly(note.date));
+    const dayErr = rejectIfNotToday(formatDateOnly(note.date), gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     await prisma.injuryNoteRecord.update({
       where: { id: note.id },
@@ -440,7 +441,7 @@ export async function deleteInjuryNote(payload: {
     if (!note || note.injuryCase.playerId !== playerId) {
       return { success: false, error: "找不到该备注" };
     }
-    const dayErr = rejectIfNotToday(formatDateOnly(note.date));
+    const dayErr = rejectIfNotToday(formatDateOnly(note.date), gate.ctx.teamTimeZone);
     if (dayErr) return dayErr;
     await prisma.injuryNoteRecord.delete({ where: { id: note.id } });
     const row = await prisma.injuryCase.findUnique({

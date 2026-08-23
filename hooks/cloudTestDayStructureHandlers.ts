@@ -9,6 +9,7 @@ import {
 import {
   defsOnlyCustomTests,
   ensureCustomTestDefs,
+  groupNoteClientEntryId,
   pruneCustomTestSlice,
 } from "@/lib/testDay/customTests";
 import { isDefaultSpeedColumnId } from "@/lib/testDay/speedGrid";
@@ -18,6 +19,7 @@ import {
   submitCloudEntry,
   tombstoneCloudEntry,
 } from "@/hooks/cloudTestDaySubmit";
+import type { DraftScope } from "@/lib/scopedStorage";
 
 type AssignmentsApi = ReturnType<typeof useTestDayAssignments>;
 type Skills = ReturnType<typeof useTestDaySkillRecords>;
@@ -28,6 +30,7 @@ export type StructurePatch = {
   assignmentLog?: AssignmentCommit[];
   customTests?: unknown;
   skillStructure?: unknown;
+  expectedVersion?: number;
 };
 
 export function createCloudStructureHandlers(input: {
@@ -43,6 +46,8 @@ export function createCloudStructureHandlers(input: {
   activeTab: string | null;
   setActiveTab: (tab: string | null) => void;
   setEditingStructure: (editing: boolean) => void;
+  onNotice: (message: string) => void;
+  scope: DraftScope | null;
 }) {
   const {
     draftId,
@@ -57,17 +62,23 @@ export function createCloudStructureHandlers(input: {
     activeTab,
     setActiveTab,
     setEditingStructure,
+    onNotice,
+    scope,
   } = input;
+  const submit = (kind: Parameters<typeof submitCloudEntry>[0]["kind"], payload: unknown) =>
+    submitCloudEntry({ draftId, kind, payload, onNotice, scope });
+  const tombstone = (clientEntryId: string) =>
+    tombstoneCloudEntry({ draftId, clientEntryId, onNotice, scope });
 
   const handleAddSpeedColumn = (name: string): boolean => {
     if (!canMutateStructure) return false;
     const trimmed = name.trim();
     if (!trimmed) {
-      window.alert("请输入测试项目名称。");
+      onNotice("请输入测试项目名称。");
       return false;
     }
     if (skills.speedColumns.some((column) => column.name === trimmed)) {
-      window.alert("该测试项目已存在，请勿重复添加。");
+      onNotice("该测试项目已存在，请勿重复添加。");
       return false;
     }
     const next = [
@@ -173,7 +184,7 @@ export function createCloudStructureHandlers(input: {
     if (!canMutateStructure) return false;
     const trimmedAuthor = author.trim();
     if (!trimmedAuthor) {
-      window.alert("请填写修改人。");
+      onNotice("请填写修改人。");
       return false;
     }
     const { added, removed } = diffAssignments(
@@ -182,11 +193,11 @@ export function createCloudStructureHandlers(input: {
     );
     const isRevision = assignments.assignmentLog.length > 0;
     if (!isRevision && added.length === 0) {
-      window.alert("请先勾选测试报名后再保存。");
+      onNotice("请先勾选测试报名后再保存。");
       return false;
     }
     if (isRevision && added.length === 0 && removed.length === 0) {
-      window.alert("排阵未改动，无需保存。");
+      onNotice("排阵未改动，无需保存。");
       return false;
     }
     const trimmedNote = note.trim();
@@ -229,7 +240,7 @@ export function createCloudStructureHandlers(input: {
     const trimmedName = assignments.customTestName.trim();
     if (!trimmedName) return false;
     if (assignments.testItems.includes(trimmedName)) {
-      window.alert("该测试项目已存在，请勿重复添加。");
+      onNotice("该测试项目已存在，请勿重复添加。");
       return false;
     }
     const nextItems = [...assignments.testItems, trimmedName];
@@ -282,27 +293,20 @@ export function createCloudStructureHandlers(input: {
     );
     void (async () => {
       if (existing) {
-        const ok = await tombstoneCloudEntry({
-          draftId,
-          clientEntryId: existing.id,
-        });
+        const ok = await tombstone(existing.id);
         if (!ok) return;
       }
       if (!note.trim()) {
         await refresh();
         return;
       }
-      await submitCloudEntry({
-        draftId,
-        kind: "custom_player_note",
-        payload: {
-          id: crypto.randomUUID(),
-          testItem,
-          playerId,
-          playerName,
-          note,
-          timestamp: Date.now(),
-        },
+      await submit("custom_player_note", {
+        id: crypto.randomUUID(),
+        testItem,
+        playerId,
+        playerName,
+        note,
+        timestamp: Date.now(),
       });
       await refresh();
     })();
@@ -314,20 +318,17 @@ export function createCloudStructureHandlers(input: {
   ): boolean => {
     if (!canSubmit) return false;
     if (members.length < 2) {
-      window.alert("一组至少两名队员。");
+      onNotice("一组至少两名队员。");
       return false;
     }
-    void submitCloudEntry({
-      draftId,
-      kind: "custom_group_note",
-      payload: {
-        id: crypto.randomUUID(),
-        testItem,
-        memberIds: members.map((member) => member.id),
-        memberNames: members.map((member) => member.name),
-        note: "",
-        timestamp: Date.now(),
-      },
+    void submit("custom_group_note", {
+      id: crypto.randomUUID(),
+      revisionId: crypto.randomUUID(),
+      testItem,
+      memberIds: members.map((member) => member.id),
+      memberNames: members.map((member) => member.name),
+      note: "",
+      timestamp: Date.now(),
     }).then((ok) => {
       if (ok) void refresh();
     });
@@ -341,15 +342,13 @@ export function createCloudStructureHandlers(input: {
     );
     if (!existing) return;
     void (async () => {
-      const ok = await tombstoneCloudEntry({
-        draftId,
-        clientEntryId: existing.id,
-      });
+      const ok = await tombstone(groupNoteClientEntryId(existing));
       if (!ok) return;
-      await submitCloudEntry({
-        draftId,
-        kind: "custom_group_note",
-        payload: { ...existing, note, timestamp: Date.now() },
+      await submit("custom_group_note", {
+        ...existing,
+        note,
+        timestamp: Date.now(),
+        revisionId: crypto.randomUUID(),
       });
       await refresh();
     })();
@@ -357,11 +356,13 @@ export function createCloudStructureHandlers(input: {
 
   const deleteCustomGroupNote = (groupId: string) => {
     if (!canSubmit) return;
+    const existing = assignments.customSlice.customGroupNotes.find(
+      (row) => row.id === groupId
+    );
     void (async () => {
-      const ok = await tombstoneCloudEntry({
-        draftId,
-        clientEntryId: groupId,
-      });
+      const ok = await tombstone(
+        existing ? groupNoteClientEntryId(existing) : groupId
+      );
       if (ok) await refresh();
     })();
   };
@@ -373,25 +374,18 @@ export function createCloudStructureHandlers(input: {
     );
     void (async () => {
       if (existing) {
-        const ok = await tombstoneCloudEntry({
-          draftId,
-          clientEntryId: existing.id,
-        });
+        const ok = await tombstone(existing.id);
         if (!ok) return;
       }
       if (!note.trim()) {
         await refresh();
         return;
       }
-      await submitCloudEntry({
-        draftId,
-        kind: "custom_single_note",
-        payload: {
-          id: crypto.randomUUID(),
-          testItem,
-          note,
-          timestamp: Date.now(),
-        },
+      await submit("custom_single_note", {
+        id: crypto.randomUUID(),
+        testItem,
+        note,
+        timestamp: Date.now(),
       });
       await refresh();
     })();

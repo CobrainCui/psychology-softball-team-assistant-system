@@ -14,6 +14,7 @@ import {
 } from "@/components/status/CyclePanel";
 import { PRE_DIMENSIONS, PRE_SCAN_PROMPT, type Scale5 } from "@/lib/clinical/preDimensions";
 import { useAssessmentPage } from "@/hooks/useAssessmentPage";
+import FailedLocalDraftTray from "@/components/status/FailedLocalDraftTray";
 
 export default function AssessmentPage() {
   const { currentUser, isMounted } = useRequireAuth();
@@ -39,6 +40,23 @@ export default function AssessmentPage() {
             {page.notice}
           </p>
         ) : null}
+        {page.todaySync === "local" ? (
+          <p className="border border-zinc-400 bg-white p-3 text-sm text-zinc-800">
+            待同步，本机未上云。恢复网络后会自动重试；教练和其他设备暂时看不到。
+          </p>
+        ) : null}
+        <FailedLocalDraftTray
+          items={page.failedLocal.map((entry) => ({
+            id: `${entry.playerId}:${entry.date}`,
+            summary: `${entry.date} 评估未上云${
+              entry.failedReason ? ` · ${entry.failedReason}` : ""
+            }`,
+          }))}
+          onDismiss={(id) => {
+            const [playerId, date] = id.split(":");
+            if (playerId && date) page.dismissFailedLocal(playerId, date);
+          }}
+        />
         <div className="border border-zinc-200 bg-white px-4 py-3 text-xs leading-relaxed text-zinc-600">
           有关节/韧带局部剧痛或旧伤不适？请前往{" "}
           <Link href="/prehab" className="underline underline-offset-2 hover:text-zinc-900">
@@ -100,9 +118,13 @@ export default function AssessmentPage() {
           disabled={page.isLoadingHistory}
           className="bg-black py-2 text-sm text-white transition-colors hover:bg-zinc-800 disabled:bg-zinc-300 disabled:text-zinc-500"
         >
-          {page.hasTodayCheck ? "更新今日四象限反馈" : "生成今日四象限反馈"}
+          {page.todaySync === "cloud"
+            ? "更新今日四象限反馈"
+            : page.todaySync === "local"
+              ? "提交到云端（本机未上云）"
+              : "生成今日四象限反馈"}
         </button>
-        {page.hasTodayCheck ? (
+        {page.todaySync !== "none" ? (
           <div className="flex justify-end">
             <RecordActions
               onDelete={() => void page.handleDeleteToday()}

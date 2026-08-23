@@ -8,7 +8,8 @@ import {
   type InjuryNoteKind,
   type PainExerciseRelationId,
 } from "@/lib/clinical/injuryKinds";
-import { isTodayDateOnly, SAME_DAY_MUTATION_ERROR, formatDateOnly } from "@/lib/dateOnly";
+import { SAME_DAY_MUTATION_ERROR, formatDateOnly } from "@/lib/dateOnly";
+import { isTeamTodayDateOnly } from "@/lib/season/timeZone";
 import {
   type PhysiologicalLoadTag,
 } from "@/lib/clinical/physiologicalLoad";
@@ -24,12 +25,20 @@ import type { ActionErr } from "@/lib/actionResult";
 
 export { errorMessage } from "@/lib/actionResult";
 
-// 推导步骤：云端改删只认记录 date 的日历日；与 dateOnly.getTodayDateStr 同一 UTC 日
-export function rejectIfNotToday(dateStr: string): ActionErr | null {
+/** 伤病不写本机草稿；失败须联网重试 */
+export const INJURY_ONLINE_ONLY_COPY =
+  "伤病须联网提交。失败不会写入本机，请检查网络后重试。";
+
+// 推导步骤：云端改删只认记录 date 的队时区自然日，不认 UTC 日界
+export function rejectIfNotToday(
+  dateStr: string,
+  timeZone: string,
+  now: Date = new Date()
+): ActionErr | null {
   if (typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
     return { success: false, error: "date 须为 YYYY-MM-DD" };
   }
-  if (!isTodayDateOnly(dateStr)) {
+  if (!isTeamTodayDateOnly(dateStr, timeZone, now)) {
     return { success: false, error: SAME_DAY_MUTATION_ERROR };
   }
   return null;

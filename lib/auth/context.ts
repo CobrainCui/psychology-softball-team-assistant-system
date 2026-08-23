@@ -7,6 +7,7 @@ import type {
   RoleKind,
   SessionUser,
 } from "@/lib/auth/types";
+import { resolveTeamTimeZone } from "@/lib/season/timeZone";
 
 export function toRoleKind(role: AccountRoleKind): RoleKind {
   return role as RoleKind;
@@ -29,6 +30,7 @@ type AccountWithRelations = {
     displayName: string;
   } | null;
   player: { name: string; gender: Gender | null } | null;
+  team: { timeZone: string } | null;
 };
 
 export function buildAuthContext(account: AccountWithRelations): AuthContext {
@@ -40,6 +42,7 @@ export function buildAuthContext(account: AccountWithRelations): AuthContext {
     accountId: account.id,
     username: account.username,
     teamId: account.teamId,
+    teamTimeZone: resolveTeamTimeZone(account.team?.timeZone),
     playerId: account.playerId,
     playerName:
       account.player?.name ?? account.membershipClaim?.displayName ?? null,
@@ -56,6 +59,7 @@ export function toSessionUser(ctx: AuthContext): SessionUser {
     accountId: ctx.accountId,
     username: ctx.username,
     teamId: ctx.teamId,
+    teamTimeZone: ctx.teamTimeZone,
     playerId: ctx.playerId,
     playerName: ctx.playerName,
     gender: ctx.gender,
@@ -69,4 +73,5 @@ export const accountAuthInclude = {
   roles: true,
   membershipClaim: true,
   player: { select: { name: true, gender: true } },
+  team: { select: { timeZone: true } },
 } as const;

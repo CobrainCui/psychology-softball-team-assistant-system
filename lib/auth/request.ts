@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { cookies, headers } from "next/headers";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants";
 import { clientIpFromHeaders } from "@/lib/auth/rateLimit";
@@ -5,6 +6,7 @@ import { clientIpFromHeaders } from "@/lib/auth/rateLimit";
 let harnessOn = false;
 let harnessToken: string | undefined;
 let harnessIp = "verify-harness";
+const harnessSession = new AsyncLocalStorage<{ token: string }>();
 
 function harnessAllowed(): boolean {
   return harnessOn && process.env.NODE_ENV !== "production";
@@ -27,12 +29,21 @@ export function setHarnessSessionToken(token: string | undefined): void {
   harnessToken = token;
 }
 
+export function runWithHarnessSession<T>(
+  token: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  return harnessSession.run({ token }, fn);
+}
+
 export function setHarnessClientIp(ip: string): void {
   harnessIp = ip;
 }
 
 export async function readSessionCookieValue(): Promise<string | undefined> {
-  if (harnessAllowed()) return harnessToken;
+  if (harnessAllowed()) {
+    return harnessSession.getStore()?.token ?? harnessToken;
+  }
   const jar = await cookies();
   return jar.get(SESSION_COOKIE_NAME)?.value;
 }

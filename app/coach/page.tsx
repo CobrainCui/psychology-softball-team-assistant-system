@@ -9,7 +9,7 @@ import {
   getCoachDaySummary,
   type CoachDaySummary,
 } from "@/lib/status/coachActions";
-import { getTodayDateStr } from "@/lib/dateOnly";
+import { getTeamTodayDateStr } from "@/lib/season/timeZone";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import SeasonReportCard from "@/components/season/SeasonReportCard";
 
@@ -22,11 +22,12 @@ export default function CoachSummaryPage() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    if (!isMounted || !currentUser || date) return;
     const timer = window.setTimeout(() => {
-      setDate(getTodayDateStr());
+      setDate(getTeamTodayDateStr(currentUser.teamTimeZone));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [isMounted, currentUser, date]);
 
   useEffect(() => {
     if (!isMounted || !currentUser) return;

@@ -17,7 +17,7 @@ import { ADD_CUSTOM_TEST_PANEL_ID } from "@/components/test-day/hitLabels";
 import { useTestDayHits } from "@/hooks/useTestDayHits";
 import { useTestDayAssignments } from "@/hooks/useTestDayAssignments";
 import { useTestDaySkillRecords } from "@/hooks/useTestDaySkillRecords";
-import type { PendingHit, SidebarMode } from "@/hooks/testDaySessionTypes";
+import type { NewRosterPlayerInput, PendingHit, SidebarMode } from "@/hooks/testDaySessionTypes";
 import { useSession } from "@/lib/useSession";
 import {
   draftScopeFromUser,
@@ -47,10 +47,11 @@ export function useTestDaySession() {
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>("T座打击");
   const [peerWriting, setPeerWriting] = useState(false);
+  const [fieldNotice, setFieldNotice] = useState<string | null>(null);
 
   const hits = useTestDayHits(currentBatterId);
-  const assignments = useTestDayAssignments();
-  const skills = useTestDaySkillRecords();
+  const assignments = useTestDayAssignments(setFieldNotice);
+  const skills = useTestDaySkillRecords(setFieldNotice);
 
   const applyDraft = (draft: SessionDraft) => {
     hits.setHits(draft.hits);
@@ -195,28 +196,16 @@ export function useTestDaySession() {
     if (removed && activeTab === testItem) setActiveTab(null);
   };
 
-  const handleAddPlayer = async () => {
-    const name = window.prompt("请输入新队员名字:");
-    if (!name || !name.trim()) return;
-
-    const genderRaw = window.prompt("请输入性别（男 / 女）:", "女");
-    if (!genderRaw) return;
-    const normalized = genderRaw.trim();
-    const gender =
-      normalized === "男" || normalized.toLowerCase() === "male"
-        ? ("male" as const)
-        : normalized === "女" || normalized.toLowerCase() === "female"
-          ? ("female" as const)
-          : null;
-    if (!gender) {
-      window.alert("性别仅支持填写「男」或「女」。");
+  const handleAddPlayer = async (input: NewRosterPlayerInput) => {
+    const name = input.name.trim();
+    if (!name) {
+      setFieldNotice("请填写队员姓名。");
       return;
     }
-
-    const res = await createRosterPlayer(name.trim(), gender);
+    const res = await createRosterPlayer(name, input.gender);
     if (!res.success) {
       console.error("云端被拒:", res.error);
-      window.alert(`创建队员失败：${res.error}`);
+      setFieldNotice(`创建队员失败：${res.error}`);
       return;
     }
     setPlayers((prev) => [...prev, res.player]);
@@ -275,6 +264,8 @@ export function useTestDaySession() {
     clearBoardAfterArchive,
     persistDraft,
     peerWriting,
+    fieldNotice,
+    setFieldNotice,
     accountId: user?.accountId ?? null,
     currentResult: hits.currentResult,
     currentPitchType: hits.currentPitchType,

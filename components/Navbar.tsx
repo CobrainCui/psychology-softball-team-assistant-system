@@ -6,6 +6,7 @@ import { logout } from "@/lib/auth/authActions";
 import { switchActiveView } from "@/lib/auth/meActions";
 import { clearAuthOwner, dropUnscopedBusinessKeys } from "@/lib/scopedStorage";
 import { useSession } from "@/lib/useSession";
+import { useState } from "react";
 import type { ActiveView, RoleKind } from "@/lib/auth/types";
 
 const PUBLIC_HREFS = new Set(["/login", "/register", "/setup"]);
@@ -71,6 +72,7 @@ function viewLabel(view: ActiveView): string {
 export default function Navbar() {
   const { user, isMounted, refresh } = useSession();
   const router = useRouter();
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
   const navLinks =
     user && user.claimStatus === "approved" && user.playerId
@@ -104,7 +106,7 @@ export default function Navbar() {
     const res = await logout();
     if (!res.success) {
       console.error("云端被拒:", res.error);
-      window.alert(`退出失败：${res.error}`);
+      setLogoutError(res.error);
       return;
     }
     // 分区草稿明确保留；只清 owner 与无主全局 key（含旧经期缓存）
@@ -116,8 +118,9 @@ export default function Navbar() {
   const displayName = user?.playerName ?? user?.username ?? "未登录";
 
   return (
-    <nav className="flex flex-wrap items-center gap-4 bg-black px-6 py-4 text-white print:hidden">
-      <span className="shrink-0 text-xl font-bold">Softball AI Engine</span>
+    <nav className="flex flex-col print:hidden">
+      <div className="flex flex-wrap items-center gap-4 bg-black px-6 py-4 text-white">
+        <span className="shrink-0 text-xl font-bold">Softball AI Engine</span>
 
       <div className="flex flex-1 flex-wrap items-center justify-evenly gap-4 md:gap-8">
         {navLinks.map((link) => (
@@ -178,6 +181,12 @@ export default function Navbar() {
           </Link>
         )}
       </div>
+      </div>
+      {logoutError ? (
+        <p className="bg-zinc-900 px-6 py-2 text-sm text-zinc-200">
+          退出失败：{logoutError}
+        </p>
+      ) : null}
     </nav>
   );
 }

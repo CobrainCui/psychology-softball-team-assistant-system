@@ -37,7 +37,7 @@ export function emptySkillTableSlice(): SkillTableSlice {
   };
 }
 
-export function useSkillTableDraft() {
+export function useSkillTableDraft(onNotice?: (message: string) => void) {
   const [speedColumns, setSpeedColumns] = useState<SpeedColumn[]>(
     createDefaultSpeedColumns()
   );
@@ -106,11 +106,11 @@ export function useSkillTableDraft() {
   const handleAddSpeedColumn = (name: string): boolean => {
     const trimmed = name.trim();
     if (!trimmed) {
-      window.alert("请输入测试项目名称。");
+      onNotice?.("请输入测试项目名称。");
       return false;
     }
     if (speedColumns.some((column) => column.name === trimmed)) {
-      window.alert("该测试项目已存在，请勿重复添加。");
+      onNotice?.("该测试项目已存在，请勿重复添加。");
       return false;
     }
     setSpeedColumns((prev) => [

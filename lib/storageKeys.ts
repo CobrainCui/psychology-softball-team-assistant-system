@@ -11,8 +11,9 @@ export const STORAGE_KEYS = {
   sessionDraft: "softball_session_draft",
   gamesHistory: "softball_games_history",
   readinessHistory: "softball_readiness_history",
-  /** @deprecated 旧 VAS 伤病快照；损伤改为 episode 草稿 */
+  /** @deprecated 旧 VAS 伤病快照；损伤改为 InjuryCase */
   injuryLog: "softball_injury_log",
+  /** 分区清遗留；/prehab 不写入 */
   injuryCases: "softball_injury_cases",
   /** 训后反馈本地草稿（云端权威） */
   sessionFeedback: "softball_session_feedback",
@@ -20,6 +21,10 @@ export const STORAGE_KEYS = {
   periodStartByPlayer: "softball_period_start",
   /** 当前浏览器会话对应的 teamId:accountId（非 cookie，供跨标签发现身份变更） */
   authOwner: "softball_auth_owner",
+  /** 云端测试日失败提交的待重试队列；成功前不得标成已上云 */
+  syncOutbox: "softball_sync_outbox",
+  /** 本浏览器协作设备 id（非名册，供测试日按设备确认） */
+  deviceId: "softball_device_id",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

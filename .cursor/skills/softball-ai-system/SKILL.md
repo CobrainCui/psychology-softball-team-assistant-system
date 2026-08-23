@@ -69,7 +69,7 @@ description: >-
 | 层 | 规则 |
 |----|------|
 | 测试日草稿 | 未归档按记录 `id` 随时改删 |
-| 已上云 | 默认仅本人，且 `date` 为今日（`isTodayDateOnly`）；服务端再检 |
+| 已上云 | 默认仅本人，且 `date` 为队时区今日（`isTeamTodayDateOnly`）；服务端再检 |
 | 经期 `period_start` | 按事件列表改删，**不套**「日期必须是今天」 |
 | 赛季协作 | `Season` / `ScheduleEvent` / `GameRecordFile` / 未确认摘要按角色、状态机、所有权改删，**不走** today-only |
 | 归档后 | `TestSession` 只读 |

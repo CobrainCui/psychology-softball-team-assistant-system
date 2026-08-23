@@ -11,7 +11,7 @@ import {
 } from "@/components/injury/InjuryForms";
 import type { PainArea } from "@/lib/clinical/painAreas";
 import type { InjuryKind, PainExerciseRelationId } from "@/lib/clinical/injuryKinds";
-import { getTodayDateStr } from "@/lib/dateOnly";
+import { getTeamTodayDateStr } from "@/lib/season/timeZone";
 import { useRequireAuth } from "@/lib/useRequireAuth";
 import {
   addInjuryNote,
@@ -26,7 +26,7 @@ import {
   updateInjuryNote,
   updateInjuryPainLog,
 } from "@/lib/status/injuryActions";
-import type { InjuryCaseDto } from "@/lib/status/shared";
+import { INJURY_ONLINE_ONLY_COPY, type InjuryCaseDto } from "@/lib/status/shared";
 
 type Tab = "today" | "history";
 
@@ -117,7 +117,7 @@ export default function InjuryPage() {
       painArea,
       locationHint,
       injuryKind,
-      startDate: getTodayDateStr(),
+      startDate: getTeamTodayDateStr(currentUser.teamTimeZone),
       painScore,
       painExerciseRelations: relations,
       note: note || null,
@@ -152,7 +152,7 @@ export default function InjuryPage() {
     }
     const res = await addInjuryPainLog({
       caseId: painTarget.id,
-      date: getTodayDateStr(),
+      date: getTeamTodayDateStr(currentUser.teamTimeZone),
       painScore,
       painExerciseRelations: relations,
       note: note || null,
@@ -186,7 +186,7 @@ export default function InjuryPage() {
     const res = await addInjuryNote({
       caseId: noteTarget.item.id,
       kind: noteTarget.kind,
-      date: getTodayDateStr(),
+      date: getTeamTodayDateStr(currentUser.teamTimeZone),
       content: noteContent,
     });
     if (!res.success) {
@@ -216,6 +216,9 @@ export default function InjuryPage() {
           </p>
         </div>
         <MedicalDisclaimer />
+        <p className="text-center text-xs text-zinc-500">
+          {INJURY_ONLINE_ONLY_COPY}
+        </p>
         {loadError && (
           <p className="border border-red-300 bg-red-50 p-3 text-sm text-red-700">
             {loadError}
@@ -287,6 +290,7 @@ export default function InjuryPage() {
             <InjuryCaseCard
               key={item.id}
               item={item}
+              timeZone={currentUser.teamTimeZone}
               onPain={(c) => {
                 setPainTarget(c);
                 setPainScore(c.latestPain ?? 3);

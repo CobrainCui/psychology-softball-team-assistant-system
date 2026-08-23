@@ -41,6 +41,8 @@ export interface CustomGroupNote {
   memberNames: string[];
   note: string;
   timestamp: number;
+  /** 协作提交用的修订 id；缺省时 clientEntryId 回退为 id */
+  revisionId?: string;
 }
 
 export interface CustomSingleNote {
@@ -116,8 +118,16 @@ export function isCustomGroupNote(value: unknown): value is CustomGroupNote {
     Array.isArray(row.memberNames) &&
     row.memberNames.every((name) => typeof name === "string") &&
     typeof row.note === "string" &&
-    typeof row.timestamp === "number"
+    typeof row.timestamp === "number" &&
+    (row.revisionId === undefined ||
+      (typeof row.revisionId === "string" && row.revisionId.length > 0))
   );
+}
+
+export function groupNoteClientEntryId(
+  note: Pick<CustomGroupNote, "id" | "revisionId">
+): string {
+  return note.revisionId && note.revisionId.length > 0 ? note.revisionId : note.id;
 }
 
 export function isCustomSingleNote(value: unknown): value is CustomSingleNote {

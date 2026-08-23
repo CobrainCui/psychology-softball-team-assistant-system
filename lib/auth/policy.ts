@@ -60,6 +60,11 @@ export function canJoinTestDayDraft(ctx: AuthContext): boolean {
   return canEnterTestDayDraft(ctx);
 }
 
+/** 协作草稿成绩快照仅已加入成员可读 */
+export function canViewTestDayDraftSnapshot(isMember: boolean): boolean {
+  return isMember;
+}
+
 export function canMutateTestDayDraftStructure(
   ctx: AuthContext,
   createdByAccountId: string

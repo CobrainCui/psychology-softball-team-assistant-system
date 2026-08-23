@@ -314,6 +314,25 @@ async function main() {
         if (fin.success) pass("finalize upload");
         else fail(`finalize upload (${fin.error})`);
 
+        const pendingOther = await createPendingUpload({
+          eventId: ev.event.id,
+          originalName: "other.pdf",
+          sizeBytes: 128,
+        });
+        if (pendingOther.success) {
+          setHarnessSessionToken(player.token);
+          const stolen = await finalizeUpload(pendingOther.fileId);
+          if (!stolen.success) pass("player cannot finalize others pending");
+          else fail("player cannot finalize others pending");
+          setHarnessSessionToken(captain.token);
+          const storedOther = await storePendingBytes(pendingOther.fileId, pdf);
+          if (storedOther.success) pass("uploader store after teammate blocked");
+          else fail(`uploader store after teammate blocked (${storedOther.error})`);
+          const finOther = await finalizeUpload(pendingOther.fileId);
+          if (finOther.success) pass("uploader finalize own pending");
+          else fail(`uploader finalize own pending (${finOther.error})`);
+        } else fail(`create second pending (${pendingOther.error})`);
+
         await prisma.gameRecordFile.update({
           where: { id: pending.fileId },
           data: { deletedAt: new Date(), deletedById: captain.accountId },
@@ -372,9 +391,23 @@ async function main() {
       title: `${PREFIX}-planned`,
     });
     if (planned.success) {
+      const cancelPending = await createPendingUpload({
+        eventId: planned.event.id,
+        originalName: "cancel.pdf",
+        sizeBytes: 128,
+      });
       const cancelled = await cancelScheduleEvent(planned.event.id, "rain");
       if (cancelled.success) pass("cancel planned event");
       else fail(`cancel planned event (${cancelled.error})`);
+      if (cancelPending.success) {
+        const pdf = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n");
+        const storedCancel = await storePendingBytes(cancelPending.fileId, pdf);
+        if (!storedCancel.success) pass("store blocked after event cancel");
+        else fail("store blocked after event cancel");
+        const finCancel = await finalizeUpload(cancelPending.fileId);
+        if (!finCancel.success) pass("finalize blocked after event cancel");
+        else fail("finalize blocked after event cancel");
+      } else fail(`create pending before cancel (${cancelPending.error})`);
     }
 
     setHarnessSessionToken(player.token);

@@ -5,12 +5,15 @@ import { resolveCycleLength } from "@/lib/clinical/cycleStats";
 import type {
   CycleProfileDto,
   CycleSharingLevel,
-  PeriodStartEventDto,
 } from "@/lib/cycleTypes";
-import { formatDateOnly, parseDateOnly } from "@/lib/dateOnly";
+import { parseDateOnly } from "@/lib/dateOnly";
 import type { ActionResult } from "@/lib/actionResult";
 import { clampScore0to10, errorMessage } from "@/lib/status/shared";
 import { requireOwnDataWriter } from "@/lib/auth/actionGuard";
+import {
+  loadCycleProfileDto,
+  loadPeriodStartDates,
+} from "@/lib/cycleProfileLoad";
 
 const CYCLE_SHARING_LEVELS = new Set<CycleSharingLevel>([
   "none",
@@ -23,58 +26,6 @@ function asCycleSharingLevel(value: unknown): CycleSharingLevel | null {
     CYCLE_SHARING_LEVELS.has(value as CycleSharingLevel)
     ? (value as CycleSharingLevel)
     : null;
-}
-
-async function loadPeriodStartEvents(
-  playerId: string
-): Promise<PeriodStartEventDto[]> {
-  const rows = await prisma.cycleEvent.findMany({
-    where: { playerId, eventType: "period_start" },
-    orderBy: { date: "asc" },
-    select: { id: true, date: true, crampsScore: true },
-  });
-  return rows.map((r) => ({
-    id: r.id,
-    date: formatDateOnly(r.date),
-    crampsScore: r.crampsScore,
-  }));
-}
-
-async function loadPeriodStartDates(playerId: string): Promise<string[]> {
-  const events = await loadPeriodStartEvents(playerId);
-  return events.map((event) => event.date);
-}
-
-async function toCycleProfileDto(
-  playerId: string
-): Promise<CycleProfileDto | null> {
-  const profile = await prisma.cycleProfile.findUnique({
-    where: { playerId },
-  });
-  if (!profile) return null;
-
-  const periodStartEvents = await loadPeriodStartEvents(playerId);
-  const periodStartDates = periodStartEvents.map((event) => event.date);
-  const resolved = resolveCycleLength(periodStartDates);
-
-  return {
-    trackingEnabled: profile.trackingEnabled,
-    sharingLevel: profile.sharingLevel,
-    typicalLengthDays: profile.typicalLengthDays,
-    hormonalContraception: profile.hormonalContraception,
-    bodyImageAnxietyOptIn: profile.bodyImageAnxietyOptIn,
-    consentAt: profile.consentAt ? profile.consentAt.toISOString() : null,
-    periodStartDates,
-    periodStartEvents,
-    lastPeriodStart:
-      periodStartDates.length > 0
-        ? periodStartDates[periodStartDates.length - 1]!
-        : null,
-    resolvedLengthDays:
-      profile.typicalLengthDays ?? resolved.typicalLengthDays,
-    confidence: resolved.confidence,
-    highVariance: resolved.highVariance,
-  };
 }
 
 async function refreshTypicalLength(playerId: string): Promise<void> {
@@ -95,7 +46,7 @@ export async function getCycleProfile(): Promise<
   try {
     const gate = await requireOwnDataWriter();
     if (!gate.success) return gate;
-    const profile = await toCycleProfileDto(gate.playerId);
+    const profile = await loadCycleProfileDto(gate.playerId);
     return { success: true, profile };
   } catch (error) {
     console.error("数据库写入失败的完整原因:", error);
@@ -163,7 +114,7 @@ export async function consentToCycleTracking(
       await refreshTypicalLength(player.id);
     }
 
-    const profile = await toCycleProfileDto(player.id);
+    const profile = await loadCycleProfileDto(player.id);
     if (!profile) {
       return { success: false, error: "周期档案写入失败" };
     }
@@ -213,7 +164,7 @@ export async function updateCycleProfileSettings(
       },
     });
 
-    const profile = await toCycleProfileDto(playerId);
+    const profile = await loadCycleProfileDto(playerId);
     if (!profile) {
       return { success: false, error: "周期档案读取失败" };
     }
@@ -276,7 +227,7 @@ export async function recordPeriodStart(
     }
 
     await refreshTypicalLength(playerId);
-    const profile = await toCycleProfileDto(playerId);
+    const profile = await loadCycleProfileDto(playerId);
     if (!profile) {
       return { success: false, error: "周期档案读取失败" };
     }
@@ -342,7 +293,7 @@ export async function updatePeriodStartEvent(
       data,
     });
     await refreshTypicalLength(playerId);
-    const profile = await toCycleProfileDto(playerId);
+    const profile = await loadCycleProfileDto(playerId);
     if (!profile) return { success: false, error: "周期档案读取失败" };
     return { success: true, profile };
   } catch (error) {
@@ -369,7 +320,7 @@ export async function deletePeriodStartEvent(payload: {
     if (!existing) return { success: false, error: "找不到该经期开始记录" };
     await prisma.cycleEvent.delete({ where: { id: existing.id } });
     await refreshTypicalLength(playerId);
-    const profile = await toCycleProfileDto(playerId);
+    const profile = await loadCycleProfileDto(playerId);
     if (!profile) return { success: false, error: "周期档案读取失败" };
     return { success: true, profile };
   } catch (error) {

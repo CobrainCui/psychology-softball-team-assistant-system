@@ -30,6 +30,10 @@ export default function EventCard({
 }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
+  const [reasonMode, setReasonMode] = useState<"cancel" | "reopen" | null>(
+    null
+  );
+  const [reasonDraft, setReasonDraft] = useState("");
   const run = async (fn: () => Promise<{ success: boolean; error?: string }>) => {
     const res = await fn();
     if (!res.success) {
@@ -38,7 +42,22 @@ export default function EventCard({
       return;
     }
     setError("");
+    setReasonMode(null);
+    setReasonDraft("");
     onChanged();
+  };
+
+  const submitReason = () => {
+    const note = reasonDraft.trim();
+    if (!note) {
+      setError(reasonMode === "reopen" ? "重开须填写原因" : "取消须填写原因");
+      return;
+    }
+    if (reasonMode === "reopen") {
+      void run(() => reopenScheduleEvent(event.id, note));
+      return;
+    }
+    void run(() => cancelScheduleEvent(event.id, note));
   };
 
   return (
@@ -65,54 +84,95 @@ export default function EventCard({
           ) : null}
           {error ? <p className="text-red-600">{error}</p> : null}
           {canManage ? (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {event.status === "planned" ? (
-                <>
-                  <button
-                    type="button"
-                    className="border border-zinc-300 px-2 py-0.5 text-xs"
-                    onClick={() => {
-                      const reason = window.prompt("取消原因");
-                      if (!reason) return;
-                      void run(() => cancelScheduleEvent(event.id, reason));
-                    }}
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    className="border border-zinc-300 px-2 py-0.5 text-xs"
-                    onClick={() => run(() => completeScheduleEvent(event.id))}
-                  >
-                    完成
-                  </button>
-                  <RecordActions
-                    onDelete={() => run(() => deleteScheduleEvent(event.id))}
-                    deleteConfirm="确认删除该赛程？"
-                  />
-                </>
-              ) : null}
-              {event.status === "cancelled" ? (
-                <button
-                  type="button"
-                  className="border border-zinc-300 px-2 py-0.5 text-xs"
-                  onClick={() => {
-                    const reason = window.prompt("重开原因");
-                    if (!reason) return;
-                    void run(() => reopenScheduleEvent(event.id, reason));
+            <div className="mt-2 flex flex-col gap-2">
+              {reasonMode ? (
+                <form
+                  className="flex flex-col gap-2"
+                  onSubmit={(eventSubmit) => {
+                    eventSubmit.preventDefault();
+                    submitReason();
                   }}
                 >
-                  重开
-                </button>
-              ) : null}
-              {event.status === "completed" ? (
-                <Link
-                  href={`/schedule/import/${event.id}`}
-                  className="border border-zinc-300 px-2 py-0.5 text-xs"
-                >
-                  iScore 导入
-                </Link>
-              ) : null}
+                  <input
+                    type="text"
+                    value={reasonDraft}
+                    onChange={(change) => setReasonDraft(change.target.value)}
+                    placeholder={
+                      reasonMode === "reopen" ? "重开原因" : "取消原因"
+                    }
+                    className="border border-zinc-300 px-2 py-1 text-xs text-zinc-900"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="submit"
+                      className="border border-zinc-900 px-2 py-0.5 text-xs"
+                    >
+                      {reasonMode === "reopen" ? "确认重开" : "确认取消"}
+                    </button>
+                    <button
+                      type="button"
+                      className="border border-zinc-300 px-2 py-0.5 text-xs"
+                      onClick={() => {
+                        setReasonMode(null);
+                        setReasonDraft("");
+                        setError("");
+                      }}
+                    >
+                      返回
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {event.status === "planned" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="border border-zinc-300 px-2 py-0.5 text-xs"
+                        onClick={() => {
+                          setError("");
+                          setReasonDraft("");
+                          setReasonMode("cancel");
+                        }}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        className="border border-zinc-300 px-2 py-0.5 text-xs"
+                        onClick={() => run(() => completeScheduleEvent(event.id))}
+                      >
+                        完成
+                      </button>
+                      <RecordActions
+                        onDelete={() => run(() => deleteScheduleEvent(event.id))}
+                        deleteConfirm="确认删除该赛程？"
+                      />
+                    </>
+                  ) : null}
+                  {event.status === "cancelled" ? (
+                    <button
+                      type="button"
+                      className="border border-zinc-300 px-2 py-0.5 text-xs"
+                      onClick={() => {
+                        setError("");
+                        setReasonDraft("");
+                        setReasonMode("reopen");
+                      }}
+                    >
+                      重开
+                    </button>
+                  ) : null}
+                  {event.status === "completed" ? (
+                    <Link
+                      href={`/schedule/import/${event.id}`}
+                      className="border border-zinc-300 px-2 py-0.5 text-xs"
+                    >
+                      iScore 导入
+                    </Link>
+                  ) : null}
+                </div>
+              )}
             </div>
           ) : null}
           <GameFilesPanel

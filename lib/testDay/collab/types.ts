@@ -25,6 +25,7 @@ export const APPEND_ENTRY_KINDS: readonly TestDayEntryKind[] = [
 export const TEST_DAY_ENTRY_STATUSES = ["active", "tombstoned"] as const;
 export type TestDayEntryStatus = (typeof TEST_DAY_ENTRY_STATUSES)[number];
 
+/** structure 为历史预留；结构并发用草稿 version + 行锁，不创建此类冲突 */
 export const TEST_DAY_CONFLICT_TYPES = [
   "value_mismatch",
   "structure",
@@ -39,6 +40,16 @@ export const TEST_DAY_CONFLICT_REVIEW_STATUSES = [
 ] as const;
 export type TestDayConflictReviewStatus =
   (typeof TEST_DAY_CONFLICT_REVIEW_STATUSES)[number];
+
+export const TEST_DAY_CONFLICT_DECISIONS = [
+  "pick",
+  "manual",
+  "dismiss",
+  "approve_delete",
+  "reject_delete",
+] as const;
+export type TestDayConflictDecision =
+  (typeof TEST_DAY_CONFLICT_DECISIONS)[number];
 
 export type CollabStoredEntry = {
   id: string;

@@ -1,4 +1,4 @@
-// 损伤 episode 本地草稿：云端失败时降级。
+// 损伤 episode 本机键：仅用于清分区遗留。`/prehab` 在线优先，失败不写本机。
 
 import { STORAGE_KEYS } from "@/lib/storageKeys";
 import { safeParseJSON } from "@/lib/safeParse";

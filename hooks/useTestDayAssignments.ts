@@ -26,7 +26,7 @@ import {
 } from "@/lib/testDay/customTests";
 import type { SidebarMode } from "@/hooks/testDaySessionTypes";
 
-export function useTestDayAssignments() {
+export function useTestDayAssignments(onNotice?: (message: string) => void) {
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("byPlayer");
   const [assignments, setAssignments] = useState<Assignments>({});
   const [testItems, setTestItems] = useState<string[]>([...DEFAULT_TEST_ITEMS]);
@@ -97,7 +97,7 @@ export function useTestDayAssignments() {
     const trimmedName = customTestName.trim();
     if (!trimmedName) return false;
     if (testItems.includes(trimmedName)) {
-      window.alert("该测试项目已存在，请勿重复添加。");
+      onNotice?.("该测试项目已存在，请勿重复添加。");
       return false;
     }
     setTestItems((prev) => [...prev, trimmedName]);
@@ -163,7 +163,7 @@ export function useTestDayAssignments() {
       return { ...prev, customGroupNotes: result.groups };
     });
     if (error) {
-      window.alert(error);
+      onNotice?.(error);
       return false;
     }
     return true;
@@ -206,7 +206,7 @@ export function useTestDayAssignments() {
     if (assignmentLocked) return false;
     const trimmedAuthor = author.trim();
     if (!trimmedAuthor) {
-      window.alert("请填写修改人。");
+      onNotice?.("请填写修改人。");
       return false;
     }
     const { added, removed } = diffAssignments(
@@ -215,11 +215,11 @@ export function useTestDayAssignments() {
     );
     const isRevision = assignmentLog.length > 0;
     if (!isRevision && added.length === 0) {
-      window.alert("请先勾选测试报名后再保存。");
+      onNotice?.("请先勾选测试报名后再保存。");
       return false;
     }
     if (isRevision && added.length === 0 && removed.length === 0) {
-      window.alert("排阵未改动，无需保存。");
+      onNotice?.("排阵未改动，无需保存。");
       return false;
     }
     const trimmedNote = note.trim();

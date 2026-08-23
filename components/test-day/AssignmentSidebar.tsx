@@ -9,6 +9,7 @@ import {
   type AssignmentCommit,
 } from "@/lib/testDay/assignmentLog";
 import type { SidebarMode } from "@/hooks/useTestDaySession";
+import type { NewRosterPlayerInput } from "@/hooks/testDaySessionTypes";
 import { useSession } from "@/lib/useSession";
 
 function formatCommitTime(timestamp: number): string {
@@ -29,7 +30,7 @@ interface AssignmentSidebarProps {
   assignmentLog: AssignmentCommit[];
   sidebarMode: SidebarMode;
   onSidebarModeChange: (mode: SidebarMode) => void;
-  onAddPlayer?: () => void;
+  onAddPlayer?: (input: NewRosterPlayerInput) => void | Promise<void>;
   onToggleAssignment: (playerId: string, testItem: string) => void;
   onSelectAllTestsForPlayer: (playerId: string) => void;
   onSelectAllPlayersForTest: (testItem: string) => void;
@@ -55,6 +56,11 @@ export default function AssignmentSidebar({
   const { user: currentUser } = useSession();
   const [author, setAuthor] = useState("");
   const [note, setNote] = useState("");
+  const [addingPlayer, setAddingPlayer] = useState(false);
+  const [newPlayerName, setNewPlayerName] = useState("");
+  const [newPlayerGender, setNewPlayerGender] = useState<"female" | "male">(
+    "female"
+  );
   const [expandedLogIds, setExpandedLogIds] = useState<Record<string, boolean>>(
     {}
   );
@@ -78,12 +84,63 @@ export default function AssignmentSidebar({
         </h2>
 
         {onAddPlayer ? (
-          <button
-            onClick={onAddPlayer}
-            className="w-full border border-zinc-300 bg-white py-2 text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
-          >
-            + 临时新增队员
-          </button>
+          addingPlayer ? (
+            <form
+              className="flex flex-col gap-2 border border-zinc-300 bg-white p-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const name = newPlayerName.trim();
+                if (!name) return;
+                void onAddPlayer({ name, gender: newPlayerGender });
+                setNewPlayerName("");
+                setAddingPlayer(false);
+              }}
+            >
+              <input
+                type="text"
+                value={newPlayerName}
+                onChange={(event) => setNewPlayerName(event.target.value)}
+                placeholder="姓名"
+                className="w-full border border-zinc-300 px-2 py-1.5 text-sm text-zinc-900"
+              />
+              <select
+                value={newPlayerGender}
+                onChange={(event) =>
+                  setNewPlayerGender(event.target.value as "female" | "male")
+                }
+                className="w-full border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900"
+              >
+                <option value="female">女</option>
+                <option value="male">男</option>
+              </select>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  className="flex-1 bg-black py-1.5 text-xs text-white hover:bg-zinc-800"
+                >
+                  添加
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddingPlayer(false);
+                    setNewPlayerName("");
+                  }}
+                  className="flex-1 border border-zinc-400 py-1.5 text-xs text-zinc-800 hover:bg-zinc-100"
+                >
+                  取消
+                </button>
+              </div>
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAddingPlayer(true)}
+              className="w-full border border-zinc-300 bg-white py-2 text-sm text-zinc-700 transition-colors hover:bg-zinc-100"
+            >
+              + 临时新增队员
+            </button>
+          )
         ) : null}
 
         <div className="flex border border-zinc-900">

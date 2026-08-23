@@ -16,6 +16,7 @@ const UNSCOPED_DROP = [
   STORAGE_KEYS.injuryCases,
   STORAGE_KEYS.sessionFeedback,
   STORAGE_KEYS.periodStartByPlayer,
+  STORAGE_KEYS.syncOutbox,
 ] as const;
 
 const ACCOUNT_DRAFT_BASES = [
@@ -24,6 +25,7 @@ const ACCOUNT_DRAFT_BASES = [
   STORAGE_KEYS.readinessHistory,
   STORAGE_KEYS.injuryCases,
   STORAGE_KEYS.sessionFeedback,
+  STORAGE_KEYS.syncOutbox,
 ] as const;
 
 export function scopedKey(

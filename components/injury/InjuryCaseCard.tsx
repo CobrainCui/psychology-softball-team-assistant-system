@@ -6,11 +6,12 @@ import type {
   InjuryPainLogDto,
 } from "@/lib/status/shared";
 import { INJURY_KIND_LABEL, painScoreText } from "@/lib/clinical/injuryKinds";
-import { isTodayDateOnly } from "@/lib/dateOnly";
+import { isTeamTodayDateOnly } from "@/lib/season/timeZone";
 import { RecordActions } from "@/components/records/RecordActions";
 
 export function InjuryCaseCard({
   item,
+  timeZone,
   onPain,
   onNote,
   onRecover,
@@ -23,6 +24,7 @@ export function InjuryCaseCard({
   onDeleteNote,
 }: {
   item: InjuryCaseDto;
+  timeZone: string;
   onPain: (c: InjuryCaseDto) => void;
   onNote: (c: InjuryCaseDto, kind: "treatment" | "rehab") => void;
   onRecover: (c: InjuryCaseDto) => void;
@@ -35,9 +37,13 @@ export function InjuryCaseCard({
   onDeleteNote?: (note: InjuryNoteDto) => void;
 }) {
   const latest = item.latestPain;
-  const caseIsToday = isTodayDateOnly(item.startDate);
-  const todayPain = item.painLogs.filter((log) => isTodayDateOnly(log.date));
-  const todayNotes = item.notes.filter((note) => isTodayDateOnly(note.date));
+  const caseIsToday = isTeamTodayDateOnly(item.startDate, timeZone);
+  const todayPain = item.painLogs.filter((log) =>
+    isTeamTodayDateOnly(log.date, timeZone)
+  );
+  const todayNotes = item.notes.filter((note) =>
+    isTeamTodayDateOnly(note.date, timeZone)
+  );
 
   return (
     <article className="flex flex-col gap-2 border border-zinc-200 bg-white p-4">

@@ -5,10 +5,14 @@ import { type Scale5 } from "@/lib/clinical/preDimensions";
 import { buildPreFeedback, type PreFeedbackResult } from "@/lib/clinical/preQuadrant";
 import { buildCycleAssessmentBundle } from "@/lib/clinical/buildCycleAssessment";
 import type { CycleGuidance } from "@/lib/clinical/cycleGuidance";
-import { getTodayDateStr } from "@/lib/dateOnly";
+import { getTeamTodayDateStr } from "@/lib/season/timeZone";
 import {
+  READINESS_DRAFT_SCHEMA_VERSION,
   removeReadinessEntry,
+  toReadinessCloudSaveInput,
   upsertReadinessEntry,
+  loadReadinessHistory,
+  loadFailedReadinessHistory,
   type ReadinessHistoryEntry,
 } from "@/lib/readinessHistory";
 import {
@@ -32,6 +36,8 @@ import type {
 } from "@/lib/cycleTypes";
 import { draftScopeFromUser } from "@/lib/scopedStorage";
 import type { SessionUser } from "@/lib/auth/types";
+import { useSyncOutbox } from "@/hooks/useSyncOutbox";
+import { PENDING_SYNC_COPY } from "@/lib/syncOutbox";
 
 export type AssessmentResultView = {
   feedback: PreFeedbackResult;
@@ -58,11 +64,23 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
   const [consentBusy, setConsentBusy] = useState(false);
   const [history, setHistory] = useState<ReadinessHistoryEntry[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
-  const [hasTodayCheck, setHasTodayCheck] = useState(false);
+  const [todaySync, setTodaySync] = useState<"none" | "cloud" | "local">("none");
   const [result, setResult] = useState<AssessmentResultView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [failedLocal, setFailedLocal] = useState<ReadinessHistoryEntry[]>([]);
 
   const draftScope = draftScopeFromUser(currentUser);
+
+  useSyncOutbox(draftScope, (result) => {
+    setFailedLocal(loadFailedReadinessHistory(draftScope));
+    const today = currentUser
+      ? getTeamTodayDateStr(currentUser.teamTimeZone)
+      : null;
+    if (today && result.readinessSynced.includes(today)) {
+      setTodaySync("cloud");
+      setNotice("已同步到云端");
+    }
+  });
 
   // 推导步骤：accountId 变化则清空内存并从云端重载；经期日不以本地缓存为权威
   useEffect(() => {
@@ -74,25 +92,82 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
       setCycleProfile(null);
       setResult(null);
       void (async () => {
+        const applyTodayCycle = (entry?: ReadinessHistoryEntry) => {
+          setCrampsScore(entry?.crampsScore ?? 0);
+          setCycleEnergy(entry?.cycleEnergy ?? null);
+          setCycleMood(entry?.cycleMood ?? null);
+          setCycleIrregular(Boolean(entry?.cycleIrregularFlag));
+        };
         const readinessRes = await getReadinessHistory();
         if (cancelled) return;
+        setFailedLocal(loadFailedReadinessHistory(draftScope));
         if (!readinessRes.success) {
           console.error("云端被拒:", readinessRes.error);
-          setHistory([]);
-          setHasTodayCheck(false);
+          const local = loadReadinessHistory(draftScope);
+          const today = getTeamTodayDateStr(currentUser.teamTimeZone);
+          const localToday = local.find(
+            (item) =>
+              item.playerId === currentUser.playerId && item.date === today
+          );
+          setHistory(local);
+          if (localToday) {
+            setSleep(localToday.sleep);
+            setStress(localToday.stress);
+            setFatigue(localToday.fatigue);
+            setSoreness(localToday.soreness);
+            setWillingness(localToday.willingness);
+            applyTodayCycle(localToday);
+            setTodaySync(
+              localToday.syncStatus === "failed" ? "none" : "local"
+            );
+          } else {
+            applyTodayCycle();
+            setTodaySync("none");
+          }
         } else {
           setHistory(readinessRes.history);
-          const today = getTodayDateStr();
+          const today = getTeamTodayDateStr(currentUser.teamTimeZone);
           const todayEntry = readinessRes.history.find((item) => item.date === today);
+          const localToday = loadReadinessHistory(draftScope).find(
+            (item) =>
+              item.playerId === currentUser.playerId && item.date === today
+          );
           if (todayEntry) {
             setSleep(todayEntry.sleep);
             setStress(todayEntry.stress);
             setFatigue(todayEntry.fatigue);
             setSoreness(todayEntry.soreness);
             setWillingness(todayEntry.willingness);
-            setHasTodayCheck(true);
+            applyTodayCycle(todayEntry);
+            setTodaySync("cloud");
+            if (localToday && currentUser.playerId) {
+              removeReadinessEntry(draftScope, currentUser.playerId, today);
+            }
+          } else if (localToday) {
+            setSleep(localToday.sleep);
+            setStress(localToday.stress);
+            setFatigue(localToday.fatigue);
+            setSoreness(localToday.soreness);
+            setWillingness(localToday.willingness);
+            applyTodayCycle(localToday);
+            setTodaySync(
+              localToday.syncStatus === "failed" ? "none" : "local"
+            );
+            setHistory((prev) => {
+              const without = prev.filter(
+                (item) =>
+                  !(
+                    item.playerId === localToday.playerId &&
+                    item.date === localToday.date
+                  )
+              );
+              return [localToday, ...without].sort((a, b) =>
+                b.date.localeCompare(a.date)
+              );
+            });
           } else {
-            setHasTodayCheck(false);
+            applyTodayCycle();
+            setTodaySync("none");
           }
         }
         if (currentUser.gender === "female") {
@@ -142,6 +217,9 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
       sorenessScore: soreness,
       recentSleep: history.slice(0, 30).map((h) => h.sleep),
       recentFatigue: history.slice(0, 30).map((h) => h.fatigue),
+      asOfDateStr: currentUser
+        ? getTeamTodayDateStr(currentUser.teamTimeZone)
+        : undefined,
     });
 
   const handleGenerate = () => {
@@ -155,7 +233,7 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
       if (!currentUser?.playerId) return;
       const entry: ReadinessHistoryEntry = {
         playerId: currentUser.playerId,
-        date: getTodayDateStr(),
+        date: getTeamTodayDateStr(currentUser.teamTimeZone),
         sleep,
         stress,
         fatigue,
@@ -164,9 +242,7 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
         physicalBattery: feedback.physicalBattery,
         mentalDrive: feedback.mentalDrive,
         quadrant: feedback.quadrant,
-      };
-      const res = await saveReadinessAssessment({
-        ...entry,
+        schemaVersion: READINESS_DRAFT_SCHEMA_VERSION,
         cycleDay: cycleBundle.phase?.dayOfCycle ?? null,
         cyclePhaseCode: cycleBundle.phase?.hidePhaseLabels
           ? null
@@ -177,16 +253,21 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
         cycleEnergy: cycleTracking ? cycleEnergy : null,
         cycleMood: cycleTracking ? cycleMood : null,
         cycleIrregularFlag: cycleTracking ? cycleIrregular : false,
-      });
+        syncStatus: "pending",
+      };
+      const res = await saveReadinessAssessment(
+        toReadinessCloudSaveInput(entry)
+      );
       if (res.success) {
         setNotice("云端打卡成功");
-        setHasTodayCheck(true);
+        setTodaySync("cloud");
       } else {
         console.error("云端被拒:", res.error);
-        setNotice("云端同步失败，已保存为本地草稿。");
         upsertReadinessEntry(draftScope, entry);
-        setHasTodayCheck(true);
+        setTodaySync("local");
+        setNotice(PENDING_SYNC_COPY);
       }
+      setFailedLocal(loadFailedReadinessHistory(draftScope));
       setHistory((prev) => {
         const withoutSameDay = prev.filter(
           (item) =>
@@ -238,7 +319,7 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
 
   const handleDeleteToday = async () => {
     if (!currentUser) return;
-    const date = getTodayDateStr();
+    const date = getTeamTodayDateStr(currentUser.teamTimeZone);
     const res = await deleteReadinessAssessment({
       date,
     });
@@ -256,8 +337,13 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
           !(item.playerId === currentUser.playerId && item.date === date)
       )
     );
-    setHasTodayCheck(false);
+    setTodaySync("none");
     setResult(null);
+  };
+
+  const dismissFailedLocal = (playerId: string, date: string) => {
+    removeReadinessEntry(draftScope, playerId, date);
+    setFailedLocal(loadFailedReadinessHistory(draftScope));
   };
 
   const applyCycleProfile = (profile: NonNullable<typeof cycleProfile>) => {
@@ -341,9 +427,11 @@ export function useAssessmentPage(currentUser: SessionUser | null, isMounted: bo
     setCycleMood,
     consentBusy,
     isLoadingHistory,
-    hasTodayCheck,
+    todaySync,
     result,
     notice,
+    failedLocal,
+    dismissFailedLocal,
     isFemale,
     cycleTracking,
     handleGenerate,

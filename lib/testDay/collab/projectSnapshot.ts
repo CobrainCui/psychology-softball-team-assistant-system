@@ -24,12 +24,13 @@ import {
 import type { AssignmentCommit } from "@/lib/testDay/assignmentLog";
 import {
   parseCustomTestSlice,
+  emptyCustomTestSlice,
   type CustomTestSlice,
 } from "@/lib/testDay/customTests";
 import { createDefaultSpeedColumns } from "@/lib/testDay/speedGrid";
 import {
   cellValueFingerprint,
-  hasOpenConflict,
+  hasOpenValueMismatch,
 } from "@/lib/testDay/collab/merge";
 import type {
   CollabStoredConflict,
@@ -88,8 +89,12 @@ function pickCellPayload(
       row.reviewStatus === "resolved" &&
       row.finalPayload != null
   );
-  if (resolved) return resolved.finalPayload;
-  if (hasOpenConflict(conflicts, entityKey)) return null;
+  if (resolved) {
+    if (resolved.type === "delete_request") return null;
+    return resolved.finalPayload;
+  }
+  // 推导步骤：open delete_request 不丢格，盘面仍显示 active 成绩，归档仍被 canArchiveDraft 拦住
+  if (hasOpenValueMismatch(conflicts, entityKey)) return null;
 
   const active = entries.filter(
     (row) =>
@@ -246,5 +251,21 @@ export function projectDraftSnapshot(input: {
     customPlayerNotes,
     customGroupNotes,
     customSingleNotes,
+  };
+}
+
+export function emptyDraftBoardSnapshot(): DraftBoardSnapshot {
+  return {
+    hits: [],
+    speedColumns: [],
+    speedMarks: [],
+    flyCatchAttempts: [],
+    strikeJudgeColumns: [],
+    strikeJudgeCells: [],
+    throwPlays: [],
+    assignments: {},
+    testItems: [],
+    assignmentLog: [],
+    ...emptyCustomTestSlice(),
   };
 }

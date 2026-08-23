@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireApiApproved } from "@/lib/auth/apiGuard";
-import { canManageSchedule } from "@/lib/auth/policy";
+import {
+  pendingFileEventUploadError,
+  pendingFileWriterError,
+} from "@/lib/season/fileUploadEligibility";
 import {
   putSeasonObject,
   readSeasonObject,
@@ -59,8 +62,16 @@ export async function PUT(
     if (!file) {
       return NextResponse.json({ error: "上传记录无效" }, { status: 404 });
     }
-    if (file.uploadedById !== gate.ctx.accountId && !canManageSchedule(gate.ctx)) {
-      return NextResponse.json({ error: "只能上传自己的文件" }, { status: 403 });
+    const writerErr = pendingFileWriterError(gate.ctx, file.uploadedById, "store");
+    if (writerErr) {
+      return NextResponse.json({ error: writerErr }, { status: 403 });
+    }
+    const eventErr = await pendingFileEventUploadError(
+      gate.ctx.teamId,
+      file.scheduleEventId
+    );
+    if (eventErr) {
+      return NextResponse.json({ error: eventErr }, { status: 403 });
     }
     const buf = Buffer.from(await request.arrayBuffer());
     await putSeasonObject(file.storageKey, buf, "application/pdf");

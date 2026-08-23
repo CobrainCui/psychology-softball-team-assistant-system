@@ -7,6 +7,7 @@ import {
   tombstoneCloudEntry,
 } from "@/hooks/cloudTestDaySubmit";
 import { parseSpeedSeconds } from "@/lib/testDay/speedGrid";
+import type { DraftScope } from "@/lib/scopedStorage";
 
 type Hits = ReturnType<typeof useTestDayHits>;
 type Skills = ReturnType<typeof useTestDaySkillRecords>;
@@ -20,6 +21,8 @@ export function createCloudScoreHandlers(input: {
   currentBatterId: string;
   currentBatter: Player | undefined;
   setCurrentBatterId: (id: string) => void;
+  onNotice: (message: string) => void;
+  scope: DraftScope | null;
 }) {
   const {
     draftId,
@@ -30,7 +33,13 @@ export function createCloudScoreHandlers(input: {
     currentBatterId,
     currentBatter,
     setCurrentBatterId,
+    onNotice,
+    scope,
   } = input;
+  const submit = (kind: Parameters<typeof submitCloudEntry>[0]["kind"], payload: unknown) =>
+    submitCloudEntry({ draftId, kind, payload, onNotice, scope });
+  const tombstone = (clientEntryId: string) =>
+    tombstoneCloudEntry({ draftId, clientEntryId, onNotice, scope });
 
   const handleConfirmHit = () => {
     if (!canSubmit || !currentBatter || !hits.isEntryPanelActive) return;
@@ -50,18 +59,11 @@ export function createCloudScoreHandlers(input: {
     };
     void (async () => {
       if (hits.editingHitId) {
-        const ok = await tombstoneCloudEntry({
-          draftId,
-          clientEntryId: hits.editingHitId,
-        });
+        const ok = await tombstone(hits.editingHitId);
         if (!ok) return;
         nextHit.id = crypto.randomUUID();
       }
-      const ok = await submitCloudEntry({
-        draftId,
-        kind: "hit",
-        payload: nextHit,
-      });
+      const ok = await submit("hit", nextHit);
       if (!ok) return;
       hits.handleCancelHit();
       await refresh();
@@ -71,7 +73,7 @@ export function createCloudScoreHandlers(input: {
   const handleDeleteHit = (hitId: string) => {
     if (!canSubmit) return;
     void (async () => {
-      const ok = await tombstoneCloudEntry({ draftId, clientEntryId: hitId });
+      const ok = await tombstone(hitId);
       if (ok) await refresh();
     })();
   };
@@ -98,7 +100,7 @@ export function createCloudScoreHandlers(input: {
       .map((hit) => hit.id);
     void (async () => {
       for (const id of ids) {
-        const ok = await tombstoneCloudEntry({ draftId, clientEntryId: id });
+        const ok = await tombstone(id);
         if (!ok) return;
       }
       await refresh();
@@ -124,32 +126,22 @@ export function createCloudScoreHandlers(input: {
     void (async () => {
       if (seconds === null) {
         if (existing) {
-          await tombstoneCloudEntry({
-            draftId,
-            clientEntryId: existing.id,
-          });
+          await tombstone(existing.id);
           await refresh();
         }
         return;
       }
       if (existing) {
-        const ok = await tombstoneCloudEntry({
-          draftId,
-          clientEntryId: existing.id,
-        });
+        const ok = await tombstone(existing.id);
         if (!ok) return;
       }
-      await submitCloudEntry({
-        draftId,
-        kind: "speed_mark",
-        payload: {
-          id: crypto.randomUUID(),
-          playerId,
-          playerName,
-          columnId,
-          seconds,
-          timestamp: Date.now(),
-        },
+      await submit("speed_mark", {
+        id: crypto.randomUUID(),
+        playerId,
+        playerName,
+        columnId,
+        seconds,
+        timestamp: Date.now(),
       });
       await refresh();
     })();
@@ -167,23 +159,16 @@ export function createCloudScoreHandlers(input: {
       : undefined;
     void (async () => {
       if (editing && editing.playerId === playerId) {
-        const ok = await tombstoneCloudEntry({
-          draftId,
-          clientEntryId: editing.id,
-        });
+        const ok = await tombstone(editing.id);
         if (!ok) return;
       }
-      await submitCloudEntry({
-        draftId,
-        kind: "fly_catch",
-        payload: {
-          id: crypto.randomUUID(),
-          playerId,
-          playerName,
-          caught,
-          note: note || undefined,
-          timestamp: Date.now(),
-        },
+      await submit("fly_catch", {
+        id: crypto.randomUUID(),
+        playerId,
+        playerName,
+        caught,
+        note: note || undefined,
+        timestamp: Date.now(),
       });
       await refresh();
     })();
@@ -192,10 +177,7 @@ export function createCloudScoreHandlers(input: {
   const handleDeleteFlyCatch = (attemptId: string) => {
     if (!canSubmit) return;
     void (async () => {
-      const ok = await tombstoneCloudEntry({
-        draftId,
-        clientEntryId: attemptId,
-      });
+      const ok = await tombstone(attemptId);
       if (ok) await refresh();
     })();
   };
@@ -221,23 +203,18 @@ export function createCloudScoreHandlers(input: {
     );
     void (async () => {
       if (existing) {
-        const ok = await tombstoneCloudEntry({
-          draftId,
-          clientEntryId: `${existing.columnId}:${existing.judgeId}:${existing.timestamp}`,
-        });
+        const ok = await tombstone(
+          `${existing.columnId}:${existing.judgeId}:${existing.timestamp}`
+        );
         if (!ok) return;
       }
-      await submitCloudEntry({
-        draftId,
-        kind: "strike_cell",
-        payload: {
-          columnId,
-          judgeId,
-          judgeName,
-          pitchCall,
-          swung,
-          timestamp: Date.now(),
-        },
+      await submit("strike_cell", {
+        columnId,
+        judgeId,
+        judgeName,
+        pitchCall,
+        swung,
+        timestamp: Date.now(),
       });
       await refresh();
     })();
@@ -250,10 +227,9 @@ export function createCloudScoreHandlers(input: {
     );
     if (!existing) return;
     void (async () => {
-      const ok = await tombstoneCloudEntry({
-        draftId,
-        clientEntryId: `${existing.columnId}:${existing.judgeId}:${existing.timestamp}`,
-      });
+      const ok = await tombstone(
+        `${existing.columnId}:${existing.judgeId}:${existing.timestamp}`
+      );
       if (ok) await refresh();
     })();
   };
@@ -268,16 +244,13 @@ export function createCloudScoreHandlers(input: {
     );
     void (async () => {
       if (existing) {
-        const ok = await tombstoneCloudEntry({
-          draftId,
-          clientEntryId: existing.id,
-        });
+        const ok = await tombstone(existing.id);
         if (!ok) return;
       }
-      await submitCloudEntry({
-        draftId,
-        kind: "throw_play",
-        payload: { ...play, id: crypto.randomUUID(), timestamp: Date.now() },
+      await submit("throw_play", {
+        ...play,
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
       });
       await refresh();
     })();
@@ -297,10 +270,7 @@ export function createCloudScoreHandlers(input: {
     );
     if (!existing) return;
     void (async () => {
-      const ok = await tombstoneCloudEntry({
-        draftId,
-        clientEntryId: existing.id,
-      });
+      const ok = await tombstone(existing.id);
       if (ok) await refresh();
     })();
   };

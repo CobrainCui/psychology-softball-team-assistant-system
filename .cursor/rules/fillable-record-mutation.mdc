@@ -11,7 +11,7 @@ alwaysApply: true
 
 - 每条已保存记录有稳定 `id`；列表行使用 `components/records/RecordActions.tsx`。
 - 测试日未归档草稿：按 id 随时改删（`hooks/useTestDaySession.ts` + 对应面板）。
-- 已上云记录：默认仅**本人**且记录 `date ===` `isTodayDateOnly` / `getTodayDateStr()`；服务端再检一次，禁止只靠藏按钮。
+- 已上云记录：默认仅**本人**且记录 `date` 为队时区今日（`isTeamTodayDateOnly` / `getTeamTodayDateStr`）；服务端再检一次，禁止只靠藏按钮。
 - 删除须 `confirm`；Server Action 返回 `{ success: true } | { success: false, error }`；失败 `console.error` + 用户提示。
 - 新云端写入配套 `updateX` / `deleteX`；所有权按现有 `playerId` 比对。
 
