@@ -121,6 +121,9 @@ export async function saveSessionFeedback(
 
     const date = parseDateOnly(payload.date);
     const clientDraftId = parseClientDraftId(payload.clientDraftId);
+    if (!clientDraftId) {
+      return { success: false, error: "须带 clientDraftId" };
+    }
     const data = {
       date,
       schemaVersion: SESSION_FEEDBACK_SCHEMA_VERSION,
@@ -131,34 +134,27 @@ export async function saveSessionFeedback(
       note,
       clientDraftId,
     };
-    // 推导步骤：带本机草稿 id 则按 player+clientDraftId upsert，避免弱网重试双计
-    const created = clientDraftId
-      ? await prisma.sessionFeedback.upsert({
-          where: {
-            playerId_clientDraftId: {
-              playerId: player.id,
-              clientDraftId,
-            },
-          },
-          create: {
-            player: { connect: { id: player.id } },
-            ...data,
-          },
-          update: {
-            activityTypes: data.activityTypes,
-            sessionRpe: data.sessionRpe,
-            durationMin: null,
-            sessionLoad: data.sessionLoad,
-            note: data.note,
-            schemaVersion: data.schemaVersion,
-          },
-        })
-      : await prisma.sessionFeedback.create({
-          data: {
-            player: { connect: { id: player.id } },
-            ...data,
-          },
-        });
+    // 推导步骤：新建必须带本机草稿 id，按 player+clientDraftId upsert，避免刷新后双计
+    const created = await prisma.sessionFeedback.upsert({
+      where: {
+        playerId_clientDraftId: {
+          playerId: player.id,
+          clientDraftId,
+        },
+      },
+      create: {
+        player: { connect: { id: player.id } },
+        ...data,
+      },
+      update: {
+        activityTypes: data.activityTypes,
+        sessionRpe: data.sessionRpe,
+        durationMin: null,
+        sessionLoad: data.sessionLoad,
+        note: data.note,
+        schemaVersion: data.schemaVersion,
+      },
+    });
 
     const view = await buildFeedbackViewForSaved(
       player.id,

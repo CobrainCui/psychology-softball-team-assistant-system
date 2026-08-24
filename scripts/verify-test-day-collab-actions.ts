@@ -726,6 +726,45 @@ async function main() {
     ) {
       pass("abandon failed while confirmed rejected");
     } else fail("abandon failed while confirmed rejected");
+    const lockedAfterReady = await submitTestDayEntry({
+      draftId: gateDraft.id,
+      kind: "speed_mark",
+      payload: speedPayload({
+        id: `${runId}-gated-lock`,
+        playerId: captainPlayerId,
+        playerName: captain.displayName,
+        seconds: 3.71,
+      }),
+    });
+    if (
+      !lockedAfterReady.success &&
+      lockedAfterReady.error === ARCHIVE_DEVICE_LOCKED_ERROR
+    ) {
+      pass("submit after both confirmed is locked");
+    } else fail("submit after both confirmed is locked");
+    const archiveAfterLockedWrite = await archiveTestDayDraft(gateDraft.id);
+    if (!archiveAfterLockedWrite.success) {
+      pass("locked submit attempt clears all device ready");
+    } else fail("locked submit attempt clears all device ready");
+    const retryAfterClear = await submitTestDayEntry({
+      draftId: gateDraft.id,
+      kind: "speed_mark",
+      payload: speedPayload({
+        id: `${runId}-gated-lock`,
+        playerId: captainPlayerId,
+        playerName: captain.displayName,
+        seconds: 3.71,
+      }),
+    });
+    if (retryAfterClear.success) {
+      pass("submit succeeds after locked attempt cleared confirm");
+    } else {
+      fail(
+        `submit succeeds after locked attempt cleared confirm (${retryAfterClear.error})`
+      );
+    }
+    await confirmMembers(gateDraft.id, [captain.token, player.token]);
+    asUser(captain.token);
     const gateLoaded = await getTestDayDraft(gateDraft.id);
     const gateVersion = gateLoaded.success ? gateLoaded.draft.version : 1;
     const structureAfterReady = await updateTestDayDraftStructure(

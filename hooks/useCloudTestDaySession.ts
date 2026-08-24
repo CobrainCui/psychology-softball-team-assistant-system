@@ -19,7 +19,12 @@ import {
 } from "@/lib/testDay/deviceActions";
 import type { TestDayDraftDto } from "@/lib/testDay/collab/dto";
 import { overlayPendingOnSnapshot } from "@/lib/testDay/collab/pendingOverlay";
-import { countInflightTestDaySubmits, reportActionFail } from "@/hooks/cloudTestDaySubmit";
+import {
+  countInflightTestDaySubmits,
+  endConfirmTestDayDraft,
+  reportActionFail,
+  tryBeginConfirmTestDayDraft,
+} from "@/hooks/cloudTestDaySubmit";
 import { createCloudScoreHandlers } from "@/hooks/cloudTestDayScoreHandlers";
 import {
   createCloudStructureHandlers,
@@ -34,6 +39,7 @@ import {
 } from "@/lib/syncOutbox";
 import { getClientDeviceId } from "@/lib/testDay/clientDevice";
 import {
+  ARCHIVE_INFLIGHT_ERROR,
   canConfirmArchiveReady,
 } from "@/lib/testDay/collab/archiveReady";
 
@@ -281,40 +287,49 @@ export function useCloudTestDaySession(draftId: string) {
   );
 
   const confirmArchiveReady = useCallback(async () => {
-    const pendingCount = countPendingTestDayOutbox(scope, draftId);
-    const failedCount = countFailedTestDayOutbox(scope, draftId);
-    const check = canConfirmArchiveReady({
-      pendingCount,
-      failedCount,
-      inflightCount: countInflightTestDaySubmits(draftId),
-      openConflictCount: sourceDto?.openConflictCount ?? dto?.openConflictCount ?? 0,
-    });
-    if (!check.ok) {
-      setFieldNotice(check.error);
+    if (!tryBeginConfirmTestDayDraft(draftId)) {
+      setFieldNotice(ARCHIVE_INFLIGHT_ERROR);
       return false;
     }
-    const deviceId = getClientDeviceId(scope);
-    if (!deviceId) {
-      setFieldNotice("缺少本机设备标识");
-      return false;
+    try {
+      const pendingCount = countPendingTestDayOutbox(scope, draftId);
+      const failedCount = countFailedTestDayOutbox(scope, draftId);
+      const check = canConfirmArchiveReady({
+        pendingCount,
+        failedCount,
+        inflightCount: countInflightTestDaySubmits(draftId),
+        openConflictCount:
+          sourceDto?.openConflictCount ?? dto?.openConflictCount ?? 0,
+      });
+      if (!check.ok) {
+        setFieldNotice(check.error);
+        return false;
+      }
+      const deviceId = getClientDeviceId(scope);
+      if (!deviceId) {
+        setFieldNotice("缺少本机设备标识");
+        return false;
+      }
+      setLocalSubmitLocked(true);
+      const res = await confirmTestDayArchiveReady(draftId, deviceId, {
+        pendingCount,
+        failedCount,
+      });
+      if (!res.success) {
+        console.error("云端被拒:", res.error);
+        setLocalSubmitLocked(false);
+        setFieldNotice(res.error);
+        return false;
+      }
+      applyDeviceGates(
+        res.deviceGates,
+        res.allDevicesArchiveReady,
+        res.selfDeviceReady
+      );
+      return true;
+    } finally {
+      endConfirmTestDayDraft(draftId);
     }
-    setLocalSubmitLocked(true);
-    const res = await confirmTestDayArchiveReady(draftId, deviceId, {
-      pendingCount,
-      failedCount,
-    });
-    if (!res.success) {
-      console.error("云端被拒:", res.error);
-      setLocalSubmitLocked(false);
-      setFieldNotice(res.error);
-      return false;
-    }
-    applyDeviceGates(
-      res.deviceGates,
-      res.allDevicesArchiveReady,
-      res.selfDeviceReady
-    );
-    return true;
   }, [
     applyDeviceGates,
     draftId,

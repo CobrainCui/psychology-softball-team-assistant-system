@@ -34,6 +34,10 @@ import {
   isDeviceArchiveReady,
   parseDeviceId,
 } from "../lib/testDay/collab/archiveReady";
+import {
+  endConfirmTestDayDraft,
+  tryBeginConfirmTestDayDraft,
+} from "../lib/testDay/collab/confirmGate";
 
 let failed = 0;
 
@@ -585,6 +589,21 @@ assert(
     openConflictBlock.error === ARCHIVE_OPEN_CONFLICT_ERROR,
   "open conflict blocks local confirm"
 );
+const confirmGateId = `confirm-gate-${Date.now()}`;
+assert(
+  tryBeginConfirmTestDayDraft(confirmGateId) === true,
+  "confirm gate accepts first holder"
+);
+assert(
+  tryBeginConfirmTestDayDraft(confirmGateId) === false,
+  "confirm gate rejects concurrent holder"
+);
+endConfirmTestDayDraft(confirmGateId);
+assert(
+  tryBeginConfirmTestDayDraft(confirmGateId) === true,
+  "confirm gate releases after end"
+);
+endConfirmTestDayDraft(confirmGateId);
 assert(
   pickLatestUnsyncedFeedbackDraftId(
     [

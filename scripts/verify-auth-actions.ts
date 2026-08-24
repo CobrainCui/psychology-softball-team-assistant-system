@@ -394,11 +394,20 @@ async function main() {
 
     const secretNote = `SECRET_NOTE_${runId}`;
     const today = getTeamTodayDateStr("Asia/Shanghai");
+    const missingDraftId = await saveSessionFeedback({
+      date: today,
+      activityTypes: ["batting"],
+      sessionRpe: 5,
+      note: secretNote,
+    });
+    if (!missingDraftId.success) pass("feedback requires clientDraftId");
+    else fail("feedback requires clientDraftId");
     const fb = await saveSessionFeedback({
       date: today,
       activityTypes: ["batting"],
       sessionRpe: 5,
       note: secretNote,
+      clientDraftId: `fb_first_${runId}`,
     });
     if (fb.success) pass("player can write own feedback today");
     else fail(`player can write own feedback today (${fb.success === false ? fb.error : ""})`);

@@ -183,7 +183,10 @@ export default function SessionFeedbackPage() {
       return;
     }
 
-    const clientDraftId = retryDraftId ?? crypto.randomUUID();
+    const clientDraftId =
+      latestUnsyncedFeedbackDraftId(scope, playerId, date) ??
+      retryDraftId ??
+      crypto.randomUUID();
     const res = await saveSessionFeedback({
       ...payload,
       clientDraftId,

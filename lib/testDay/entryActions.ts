@@ -36,6 +36,8 @@ async function requireWritableDevice(
   const device = await upsertDraftDevice(tx, input);
   if (!device.ok) return { success: false, error: device.error };
   if (device.archiveReadyAt) {
+    // 推导步骤：确认后仍来写，说明本机还有未上云成绩；清全场确认，避免带着缺成绩归档
+    await clearAllDraftDeviceReady(tx, input.draftId);
     return { success: false, error: ARCHIVE_DEVICE_LOCKED_ERROR };
   }
   return { success: true };
