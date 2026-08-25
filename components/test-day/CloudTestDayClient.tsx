@@ -20,11 +20,16 @@ import {
   ARCHIVE_DEVICES_NOT_READY_ERROR,
   ARCHIVE_SELF_FAILED_ERROR,
 } from "@/lib/testDay/collab/archiveReady";
-import { abandonTestDayFailedOutbox } from "@/lib/testDay/deviceActions";
+import {
+  abandonTestDayFailedOutbox,
+  reportTestDayDeviceOutbox,
+} from "@/lib/testDay/deviceActions";
 import { getClientDeviceId } from "@/lib/testDay/clientDevice";
 import { draftScopeFromUser } from "@/lib/scopedStorage";
 import {
   ARCHIVE_PENDING_SYNC_ERROR,
+  countFailedTestDayOutbox,
+  countPendingTestDayOutbox,
   FAILED_SYNC_COPY,
   outboxItemDraftId,
   PENDING_SYNC_COPY,
@@ -94,15 +99,40 @@ export default function CloudTestDayClient({ draftId }: { draftId: string }) {
       session.setFieldNotice("当前没有可归档的测试记录。");
       return;
     }
-    if (session.draftPendingCount > 0) {
+    const deviceId = getClientDeviceId(scope);
+    if (!deviceId) {
+      session.setFieldNotice("缺少本机设备标识");
+      return;
+    }
+    const pendingCount = countPendingTestDayOutbox(scope, draftId);
+    const failedCount = countFailedTestDayOutbox(scope, draftId);
+    if (pendingCount > 0) {
       session.setFieldNotice(ARCHIVE_PENDING_SYNC_ERROR);
       return;
     }
-    if (session.draftFailedCount > 0) {
+    if (failedCount > 0) {
       session.setFieldNotice(ARCHIVE_SELF_FAILED_ERROR);
       return;
     }
-    if (!dto?.allDevicesArchiveReady) {
+    const report = await reportTestDayDeviceOutbox(draftId, deviceId, {
+      pendingCount,
+      failedCount,
+    });
+    if (!report.success) {
+      console.error("云端被拒:", report.error);
+      session.setFieldNotice(report.error);
+      return;
+    }
+    await session.refresh();
+    if (pendingCount > 0 || failedCount > 0) {
+      session.setFieldNotice(
+        pendingCount > 0
+          ? ARCHIVE_PENDING_SYNC_ERROR
+          : ARCHIVE_SELF_FAILED_ERROR
+      );
+      return;
+    }
+    if (!report.allDevicesArchiveReady) {
       session.setFieldNotice(ARCHIVE_DEVICES_NOT_READY_ERROR);
       return;
     }

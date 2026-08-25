@@ -224,6 +224,16 @@ export function pickLatestUnsyncedFeedbackDraftId(
   return latest.id;
 }
 
+export function allocateFeedbackClientDraftId(input: {
+  mode: "new" | "retry";
+  retryDraftId: string | null;
+  createId?: () => string;
+}): string {
+  // 推导步骤：新建永远新 UUID；只有显式重试未同步稿才复用 retryDraftId
+  if (input.mode === "retry" && input.retryDraftId) return input.retryDraftId;
+  return (input.createId ?? (() => crypto.randomUUID()))();
+}
+
 export function latestUnsyncedFeedbackDraftId(
   scope: DraftScope | null,
   playerId: string,

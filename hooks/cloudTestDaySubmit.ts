@@ -8,9 +8,11 @@ import type { DraftScope } from "@/lib/scopedStorage";
 import { getClientDeviceId } from "@/lib/testDay/clientDevice";
 import {
   ARCHIVE_DEVICE_ID_REQUIRED_ERROR,
-  ARCHIVE_INFLIGHT_ERROR,
+  ARCHIVE_DEVICE_LOCKED_ERROR,
 } from "@/lib/testDay/collab/archiveReady";
 import {
+  countFailedTestDayOutbox,
+  countPendingTestDayOutbox,
   isPermanentSyncReject,
   PENDING_SYNC_COPY,
   removeSyncOutboxItem,
@@ -18,6 +20,7 @@ import {
   testDayTombstoneDedupeKey,
   upsertSyncOutboxItem,
 } from "@/lib/syncOutbox";
+import { reportTestDayDeviceOutbox } from "@/lib/testDay/deviceActions";
 import {
   beginInflightTestDaySubmit,
   countInflightTestDaySubmits,
@@ -43,6 +46,19 @@ export function reportActionFail(
   return false;
 }
 
+function reportOutboxAfterEnqueue(
+  draftId: string,
+  scope: DraftScope | null,
+  deviceId: string
+): void {
+  void reportTestDayDeviceOutbox(draftId, deviceId, {
+    pendingCount: countPendingTestDayOutbox(scope, draftId),
+    failedCount: countFailedTestDayOutbox(scope, draftId),
+  }).then((res) => {
+    if (!res.success) console.error("云端被拒:", res.error);
+  });
+}
+
 export async function submitCloudEntry(input: {
   draftId: string;
   kind: TestDayEntryKind;
@@ -56,21 +72,7 @@ export async function submitCloudEntry(input: {
     return reportActionFail(ARCHIVE_DEVICE_ID_REQUIRED_ERROR, input.onNotice);
   }
   if (isConfirmingTestDayDraft(input.draftId)) {
-    if (parsed.ok) {
-      upsertSyncOutboxItem(input.scope, {
-        kind: "test_day_entry",
-        dedupeKey: testDayEntryDedupeKey(input.draftId, parsed.clientEntryId),
-        payload: {
-          draftId: input.draftId,
-          kind: input.kind,
-          payload: input.payload,
-          deviceId,
-        },
-      });
-      input.onNotice(PENDING_SYNC_COPY);
-      return true;
-    }
-    return reportActionFail(ARCHIVE_INFLIGHT_ERROR, input.onNotice);
+    return reportActionFail(ARCHIVE_DEVICE_LOCKED_ERROR, input.onNotice);
   }
   beginInflightTestDaySubmit(input.draftId);
   try {
@@ -89,6 +91,7 @@ export async function submitCloudEntry(input: {
         });
         input.onNotice(PENDING_SYNC_COPY);
         console.error("云端被拒:", res.error);
+        reportOutboxAfterEnqueue(input.draftId, input.scope, deviceId);
         // 推导步骤：已入待同步队列，走本地成功路径以便盘面投影
         return true;
       }
@@ -120,20 +123,7 @@ export async function tombstoneCloudEntry(input: {
     return reportActionFail(ARCHIVE_DEVICE_ID_REQUIRED_ERROR, input.onNotice);
   }
   if (isConfirmingTestDayDraft(input.draftId)) {
-    upsertSyncOutboxItem(input.scope, {
-      kind: "test_day_tombstone",
-      dedupeKey: testDayTombstoneDedupeKey(
-        input.draftId,
-        input.clientEntryId
-      ),
-      payload: {
-        draftId: input.draftId,
-        clientEntryId: input.clientEntryId,
-        deviceId,
-      },
-    });
-    input.onNotice(PENDING_SYNC_COPY);
-    return true;
+    return reportActionFail(ARCHIVE_DEVICE_LOCKED_ERROR, input.onNotice);
   }
   beginInflightTestDaySubmit(input.draftId);
   try {
@@ -154,6 +144,7 @@ export async function tombstoneCloudEntry(input: {
         });
         input.onNotice(PENDING_SYNC_COPY);
         console.error("云端被拒:", res.error);
+        reportOutboxAfterEnqueue(input.draftId, input.scope, deviceId);
         return true;
       }
       return reportActionFail(res.error, input.onNotice);

@@ -22,6 +22,7 @@ import {
   putSeasonObject,
   seasonStorageKey,
 } from "@/lib/season/storage";
+import { looksLikePdf } from "@/lib/season/pdfGuard";
 import type { GameFileDto } from "@/lib/season/types";
 
 function toDto(row: {
@@ -131,6 +132,9 @@ export async function storePendingBytes(
     if (eventErr) return { success: false, error: eventErr };
     if (bytes.length > PDF_MAX_BYTES) {
       return { success: false, error: "文件超过 20MB" };
+    }
+    if (!looksLikePdf(bytes)) {
+      return { success: false, error: "不是合法 PDF" };
     }
     await putSeasonObject(file.storageKey, bytes, "application/pdf");
     return { success: true };

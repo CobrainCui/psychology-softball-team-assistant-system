@@ -90,7 +90,7 @@ Prisma client 输出：`lib/generated/prisma`。日期自然日落库：`lib/dat
 app/schedule/page.tsx
   → components/season/*
     → lib/season/seasonActions.ts、scheduleActions.ts、fileActions.ts、summaryActions.ts、reports.ts
-      → lib/season/storage.ts → 私有 Vercel Blob（token 或 OIDC）或 `.tmp/season-blob`
+      → lib/season/storage.ts → 生产必须私有 Vercel Blob（token 或 OIDC）；仅非生产可写 `.tmp/season-blob`
       → lib/db.ts
 ```
 
@@ -100,7 +100,7 @@ app/schedule/page.tsx
 
 云端协作：`TestDayDraft.status` = `open | frozen | archived`。`open` 可加入与改结构；`frozen` 停加入与结构、仍可提交成绩；`archived` 拒绝写入。结构 Json：`testItems` / `assignments` / `customTests` / `skillStructure`（测速列、好球列）。`getTestDayDraft` 对未加入成员返回宾客 DTO（空 snapshot：无默认测试项/排阵/成绩/冲突）；已归档时带 `archivedSessionId` 指向正式 `TestSession`。正式回看走 `/sessions/[sessionId]`。
 
-entityKey：`hit:{clientEntryId}`、`fly:{clientEntryId}` 追加并集；`speed:{playerId}:{columnId}`、`strike:{columnId}:{judgeId}`、`throw:{testItem}:{throwerId}:{firstBaseId}`、`cnote:{testItem}:{scope}` 同值去重、异值冲突不覆盖。轮询 5s（页面隐藏时暂停），无 WebSocket。弱网失败用页内提示/重试，不弹 `window.alert`。评估/训后本机稿与测试日失败 Entry 在恢复网络后按账号分区自动重试；永久拒绝（today-only / 已归档等）进失败匣，成功前文案保持「待同步，本机未上云」；禁止把本机 `session_draft` 当成正式归档。无 open 冲突、且每格有唯一最终值、且**每名已加入成员均有录入设备、且每台已登记设备均已确认（且该设备上报 pending/failed 均为 0）**才 `archiveTestDayDraft` → `TestSession.sourceDraftId`。设备在加入/拉盘面/提交时登记（`TestDayDraftDevice`）。确认须在同一事务写入该设备 outbox 条数，pending/failed>0 或有 open 冲突则拒绝；确认后该设备禁止再提交，也禁止放弃 failed。任一台设备上报 pending/failed、成功写入、冲突裁决或结构 PATCH 会清空全场确认。不能只靠客户端 React 状态；确认前读本机 outbox 并计入 in-flight 提交。`delete_request` 待裁决时投影仍显示原成绩，归档仍被挡住。异值冲突禁止 `dismiss`，须 `pick` 候选或手填合法最终值；已 dismiss 但多条异值仍挡归档。归档、Entry/冲突、冻结与结构 PATCH 均在事务内 `FOR UPDATE` 锁草稿；结构 PATCH 必须带匹配的 `expectedVersion`（缺或不匹配则拒绝，不创建 `structure` 冲突行）。open 冲突有部分唯一索引。空盘面拒绝归档。草稿日期须为队时区当日，或次日补归档。`saveTestSession` 与 `POST /api/sessions` 已关闭（410 / `{ success: false }`），禁止再创建无 `sourceDraftId` 的正式场次。本机 `session_draft` 仅单设备恢复。归档读路径（列表/详情/`GET /api/sessions`/`sessionToGameArchive`）用 `sessionAttributionDate`，禁止 UTC 切片当测试日日期。
+entityKey：`hit:{clientEntryId}`、`fly:{clientEntryId}` 追加并集；`speed:{playerId}:{columnId}`、`strike:{columnId}:{judgeId}`、`throw:{testItem}:{throwerId}:{firstBaseId}`、`cnote:{testItem}:{scope}` 同值去重、异值冲突不覆盖。轮询 5s（页面隐藏时暂停），无 WebSocket。弱网失败用页内提示/重试，不弹 `window.alert`。评估/训后本机稿与测试日失败 Entry 在恢复网络后按账号分区自动重试；永久拒绝（today-only / 已归档等）进失败匣，成功前文案保持「待同步，本机未上云」；禁止把本机 `session_draft` 当成正式归档。无 open 冲突、且每格有唯一最终值、且**每名已加入成员均有录入设备、且每台已登记设备均已确认（且该设备上报 pending/failed 均为 0）**才 `archiveTestDayDraft` → `TestSession.sourceDraftId`。设备在加入/拉盘面/提交时登记（`TestDayDraftDevice`）。确认须在同一事务写入该设备 outbox 条数，pending/failed>0 或有 open 冲突则拒绝；确认点击即禁录，飞行中拒绝新录入进 outbox；确认后该设备禁止再提交，也禁止放弃 failed。outbox 变化须立即上报并清确认。任一台设备上报 pending/failed、成功写入、冲突裁决或结构 PATCH 会清空全场确认。不能只靠客户端 React 状态；确认前读本机 outbox 并计入 in-flight 提交；归档前再刷新设备状态。`delete_request` 待裁决时投影仍显示原成绩，归档仍被挡住。异值冲突禁止 `dismiss`，须 `pick` 候选或手填合法最终值；已 dismiss 但多条异值仍挡归档。归档、Entry/冲突、冻结与结构 PATCH 均在事务内 `FOR UPDATE` 锁草稿；结构 PATCH 必须带匹配的 `expectedVersion`（缺或不匹配则拒绝，不创建 `structure` 冲突行）。open 冲突有部分唯一索引。空盘面拒绝归档。草稿日期须为队时区当日，或次日补归档。`saveTestSession` 与 `POST /api/sessions` 已关闭（410 / `{ success: false }`），禁止再创建无 `sourceDraftId` 的正式场次。本机 `session_draft` 仅单设备恢复。归档读路径（列表/详情/`GET /api/sessions`/`sessionToGameArchive`）用 `sessionAttributionDate`，禁止 UTC 切片当测试日日期。
 
 | 改什么 | 放哪 |
 |--------|------|

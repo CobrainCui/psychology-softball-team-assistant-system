@@ -23,8 +23,9 @@ import { buildGuestDraftDto } from "../lib/testDay/collab/dto";
 import { validateEntryPayload } from "../lib/testDay/collab/validatePayload";
 import type { CollabStoredEntry } from "../lib/testDay/collab/types";
 import { createDefaultSpeedColumns } from "../lib/testDay/speedGrid";
-import { pickLatestUnsyncedFeedbackDraftId } from "../lib/sessionFeedback";
+import { pickLatestUnsyncedFeedbackDraftId, allocateFeedbackClientDraftId } from "../lib/sessionFeedback";
 import {
+  ARCHIVE_DEVICE_LOCKED_ERROR,
   ARCHIVE_SELF_FAILED_ERROR,
   ARCHIVE_SELF_PENDING_ERROR,
   ARCHIVE_INFLIGHT_ERROR,
@@ -36,8 +37,14 @@ import {
 } from "../lib/testDay/collab/archiveReady";
 import {
   endConfirmTestDayDraft,
+  isConfirmingTestDayDraft,
   tryBeginConfirmTestDayDraft,
 } from "../lib/testDay/collab/confirmGate";
+import {
+  contentLengthExceedsLimit,
+  looksLikePdf,
+  seasonLocalDiskAllowed,
+} from "../lib/season/pdfGuard";
 
 let failed = 0;
 
@@ -605,6 +612,24 @@ assert(
 );
 endConfirmTestDayDraft(confirmGateId);
 assert(
+  isConfirmingTestDayDraft(confirmGateId) === false,
+  "confirm gate is not confirming after end"
+);
+const confirmSubmitId = `confirm-submit-${Date.now()}`;
+assert(
+  tryBeginConfirmTestDayDraft(confirmSubmitId) === true,
+  "confirm gate blocks submit while confirming"
+);
+assert(
+  isConfirmingTestDayDraft(confirmSubmitId) === true,
+  "confirm gate marks draft as confirming"
+);
+assert(
+  ARCHIVE_DEVICE_LOCKED_ERROR.length > 0,
+  "confirming uses device locked copy for blocked submit"
+);
+endConfirmTestDayDraft(confirmSubmitId);
+assert(
   pickLatestUnsyncedFeedbackDraftId(
     [
       {
@@ -624,6 +649,44 @@ assert(
     "2026-08-23"
   ) === "new",
   "latest unsynced feedback draft is the newest timestamp"
+);
+const fbA: string = allocateFeedbackClientDraftId({
+  mode: "new",
+  retryDraftId: null,
+  createId: () => "fb-a",
+});
+const fbB: string = allocateFeedbackClientDraftId({
+  mode: "new",
+  retryDraftId: "fb-a",
+  createId: () => "fb-b",
+});
+assert(
+  fbA === "fb-a" && fbB === "fb-b",
+  "two new same-day feedback drafts get distinct clientDraftId"
+);
+assert(
+  allocateFeedbackClientDraftId({
+    mode: "retry",
+    retryDraftId: "retry-1",
+    createId: () => "new-id",
+  }) === "retry-1",
+  "retry mode reuses retryDraftId"
+);
+assert(
+  contentLengthExceedsLimit(String(20 * 1024 * 1024 + 1), 20 * 1024 * 1024) &&
+    !contentLengthExceedsLimit("1024", 20 * 1024 * 1024),
+  "pdf content-length guard"
+);
+assert(
+  looksLikePdf(Buffer.from("%PDF-1.4\n")) &&
+    !looksLikePdf(Buffer.from("not-pdf")),
+  "pdf magic header guard"
+);
+assert(
+  seasonLocalDiskAllowed({ NODE_ENV: "development" }) &&
+    !seasonLocalDiskAllowed({ NODE_ENV: "production" }) &&
+    !seasonLocalDiskAllowed({ VERCEL: "1" }),
+  "season local disk only in non-production dev"
 );
 
 if (failed > 0) {

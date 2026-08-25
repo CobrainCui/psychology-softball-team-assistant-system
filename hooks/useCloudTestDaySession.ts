@@ -22,6 +22,7 @@ import { overlayPendingOnSnapshot } from "@/lib/testDay/collab/pendingOverlay";
 import {
   countInflightTestDaySubmits,
   endConfirmTestDayDraft,
+  isConfirmingTestDayDraft,
   reportActionFail,
   tryBeginConfirmTestDayDraft,
 } from "@/hooks/cloudTestDaySubmit";
@@ -291,6 +292,8 @@ export function useCloudTestDaySession(draftId: string) {
       setFieldNotice(ARCHIVE_INFLIGHT_ERROR);
       return false;
     }
+    // 推导步骤：闸一拿住立刻禁录，再读 outbox；避免确认飞行中成绩只进本机队列
+    setLocalSubmitLocked(true);
     try {
       const pendingCount = countPendingTestDayOutbox(scope, draftId);
       const failedCount = countFailedTestDayOutbox(scope, draftId);
@@ -302,15 +305,16 @@ export function useCloudTestDaySession(draftId: string) {
           sourceDto?.openConflictCount ?? dto?.openConflictCount ?? 0,
       });
       if (!check.ok) {
+        setLocalSubmitLocked(false);
         setFieldNotice(check.error);
         return false;
       }
       const deviceId = getClientDeviceId(scope);
       if (!deviceId) {
+        setLocalSubmitLocked(false);
         setFieldNotice("缺少本机设备标识");
         return false;
       }
-      setLocalSubmitLocked(true);
       const res = await confirmTestDayArchiveReady(draftId, deviceId, {
         pendingCount,
         failedCount,
@@ -398,7 +402,8 @@ export function useCloudTestDaySession(draftId: string) {
     !rosterError &&
     rosterReady &&
     !dto?.selfDeviceReady &&
-    !localSubmitLocked;
+    !localSubmitLocked &&
+    !isConfirmingTestDayDraft(draftId);
   const canMutateStructure =
     Boolean(dto?.canMutateStructure) && dto?.status === "open";
 

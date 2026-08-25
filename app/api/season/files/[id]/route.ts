@@ -8,7 +8,13 @@ import {
 import {
   putSeasonObject,
   readSeasonObject,
+  PDF_MAX_BYTES,
 } from "@/lib/season/storage";
+import {
+  contentLengthExceedsLimit,
+  looksLikePdf,
+  SEASON_BLOB_REQUIRED_ERROR,
+} from "@/lib/season/pdfGuard";
 
 export async function GET(
   request: Request,
@@ -73,11 +79,31 @@ export async function PUT(
     if (eventErr) {
       return NextResponse.json({ error: eventErr }, { status: 403 });
     }
+    const declared = request.headers.get("content-length");
+    if (!declared) {
+      return NextResponse.json({ error: "须提供 Content-Length" }, { status: 411 });
+    }
+    if (contentLengthExceedsLimit(declared, PDF_MAX_BYTES)) {
+      return NextResponse.json({ error: "文件超过 20MB" }, { status: 413 });
+    }
     const buf = Buffer.from(await request.arrayBuffer());
+    if (buf.length > PDF_MAX_BYTES) {
+      return NextResponse.json({ error: "文件超过 20MB" }, { status: 413 });
+    }
+    if (!looksLikePdf(buf)) {
+      return NextResponse.json({ error: "不是合法 PDF" }, { status: 400 });
+    }
     await putSeasonObject(file.storageKey, buf, "application/pdf");
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[PUT /api/season/files]", error);
+    const message = error instanceof Error ? error.message : "上传失败";
+    if (message === SEASON_BLOB_REQUIRED_ERROR) {
+      return NextResponse.json({ error: message }, { status: 503 });
+    }
+    if (message.includes("20MB")) {
+      return NextResponse.json({ error: message }, { status: 413 });
+    }
     return NextResponse.json({ error: "上传失败" }, { status: 500 });
   }
 }

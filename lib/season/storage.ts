@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { BlobNotFoundError, del, get, head, put } from "@vercel/blob";
+import {
+  SEASON_BLOB_REQUIRED_ERROR,
+  seasonLocalDiskAllowed,
+} from "@/lib/season/pdfGuard";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const LOCAL_ROOT = path.join(process.cwd(), ".tmp", "season-blob");
@@ -55,6 +59,9 @@ export async function putSeasonObject(
       ...blobAuth(),
     });
     return;
+  }
+  if (!seasonLocalDiskAllowed(process.env)) {
+    throw new Error(SEASON_BLOB_REQUIRED_ERROR);
   }
   const dest = localPath(key);
   await mkdir(path.dirname(dest), { recursive: true });

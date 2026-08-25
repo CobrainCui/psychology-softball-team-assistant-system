@@ -24,8 +24,8 @@ import {
 import { getTeamTodayDateStr } from "@/lib/season/timeZone";
 import {
   appendSessionFeedbackDraft,
+  allocateFeedbackClientDraftId,
   deleteSessionFeedbackDraft,
-  latestUnsyncedFeedbackDraftId,
   loadFailedSessionFeedbackDrafts,
   loadPlayerSessionFeedbackDrafts,
   reconcileSessionFeedbackDrafts,
@@ -79,7 +79,6 @@ export default function SessionFeedbackPage() {
   } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failedLocal, setFailedLocal] = useState<SessionFeedbackEntry[]>([]);
-  const [retryDraftId, setRetryDraftId] = useState<string | null>(null);
 
   const scope = draftScopeFromUser(currentUser);
 
@@ -110,7 +109,6 @@ export default function SessionFeedbackPage() {
       .map(fromLocal);
     setEntries([...cloud, ...local]);
     setFailedLocal(loadFailedSessionFeedbackDrafts(scope, playerId));
-    setRetryDraftId(latestUnsyncedFeedbackDraftId(scope, playerId, date));
   };
 
   useSyncOutbox(scope, (result) => {
@@ -183,17 +181,16 @@ export default function SessionFeedbackPage() {
       return;
     }
 
-    const clientDraftId =
-      latestUnsyncedFeedbackDraftId(scope, playerId, date) ??
-      retryDraftId ??
-      crypto.randomUUID();
+    const clientDraftId = allocateFeedbackClientDraftId({
+      mode: "new",
+      retryDraftId: null,
+    });
     const res = await saveSessionFeedback({
       ...payload,
       clientDraftId,
     });
     if (res.success) {
       deleteSessionFeedbackDraft(scope, clientDraftId);
-      setRetryDraftId(null);
       setStatus("saved");
       setView(res.view);
       resetForm();
@@ -208,7 +205,6 @@ export default function SessionFeedbackPage() {
         sessionRpe,
         note: noteTrimmed,
       });
-      setRetryDraftId(clientDraftId);
       setStatus("local");
       setNotice(PENDING_SYNC_COPY);
       resetForm();
